@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
-# Docker でボットをビルド・起動し、ログを表示する
+# リリースビルドしてボットを起動する（設定は .env から読み込まれる）
 set -e
-docker compose up -d --build
-docker compose logs -f
+cd "$(dirname "$0")"
+cargo build --release
+exec ./target/release/discord_task_bot

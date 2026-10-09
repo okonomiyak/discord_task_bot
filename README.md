@@ -66,11 +66,33 @@ Discord Developer Portal → OAuth2 → URL Generator で以下を有効化:
 cargo run --release
 ```
 
-Docker の場合（DB は `bot-data` ボリュームに永続化されます）:
+または `./start.sh`（リリースビルドして起動）。
+
+#### 常駐させる場合（systemd の例）
+
+`/etc/systemd/system/discord-task-bot.service`:
+
+```ini
+[Unit]
+Description=Discord Task Bot
+After=network-online.target
+
+[Service]
+WorkingDirectory=/path/to/discord_task_bot
+ExecStart=/path/to/discord_task_bot/target/release/discord_task_bot
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
 
 ```bash
-./start.sh   # = docker compose up -d --build && docker compose logs -f
+cargo build --release
+sudo systemctl enable --now discord-task-bot
+journalctl -u discord-task-bot -f   # ログ確認
 ```
+
+`.env` と `tasks.db` は `WorkingDirectory` から読み書きされます。
 
 ### 開発
 
