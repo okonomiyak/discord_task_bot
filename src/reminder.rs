@@ -9,7 +9,7 @@ use crate::{
     time::{due_to_utc, format_due, format_duration},
 };
 
-/// 60秒ごとにリマインダーと期限切れをチェックするループ
+/// 60秒ごとにリマインダー・期限切れ・宿題の通知をチェックするループ
 pub async fn run(db: Database, http: Arc<Http>) {
     let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
     loop {
@@ -19,6 +19,15 @@ pub async fn run(db: Database, http: Arc<Http>) {
         }
         if let Err(e) = check_overdue(&db, &http).await {
             eprintln!("期限切れチェックエラー: {:?}", e);
+        }
+        if let Err(e) = crate::hw_notify::generate_repeats(&db).await {
+            eprintln!("毎週の宿題の登録エラー: {:?}", e);
+        }
+        if let Err(e) = crate::hw_notify::check_reminders(&db, &http).await {
+            eprintln!("宿題通知チェックエラー: {:?}", e);
+        }
+        if let Err(e) = crate::hw_notify::check_summaries(&db, &http).await {
+            eprintln!("宿題まとめ投稿エラー: {:?}", e);
         }
     }
 }

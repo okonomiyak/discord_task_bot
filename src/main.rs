@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod hw_notify;
 mod models;
 mod reminder;
 mod time;
@@ -38,7 +39,12 @@ async fn main() {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![commands::task(), commands::now(), commands::help()],
+            commands: vec![
+                commands::task(),
+                commands::hw(),
+                commands::now(),
+                commands::help(),
+            ],
             on_error: |err| {
                 Box::pin(async move {
                     match err {
@@ -58,6 +64,19 @@ async fn main() {
                             }
                         }
                     }
+                })
+            },
+            // 完了ボタンはメッセージが古くても・ボット再起動後でも押せるよう、イベントで受け取る
+            event_handler: |ctx, event, _framework, data| {
+                Box::pin(async move {
+                    if let serenity::FullEvent::InteractionCreate {
+                        interaction: serenity::Interaction::Component(component),
+                    } = event
+                        && let Err(e) = commands::handle_component(ctx, data, component).await
+                    {
+                        eprintln!("ボタン処理エラー: {:?}", e);
+                    }
+                    Ok(())
                 })
             },
             ..Default::default()

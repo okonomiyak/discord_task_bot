@@ -1,6 +1,8 @@
 use std::sync::OnceLock;
 
-use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeZone, Utc};
+use chrono::{
+    DateTime, Datelike, Duration, NaiveDate, NaiveDateTime, NaiveTime, TimeZone, Timelike, Utc,
+};
 use chrono_tz::Tz;
 
 /// DB に保存する期限の正規化フォーマット
@@ -31,6 +33,133 @@ pub fn parse_due(s: &str) -> Option<NaiveDateTime> {
     NaiveDate::parse_from_str(&s, "%Y-%m-%d")
         .ok()
         .and_then(|d| d.and_hms_opt(0, 0, 0))
+}
+
+/// 現在時刻（設定タイムゾーンの壁時計時刻）
+pub fn local_now() -> NaiveDateTime {
+    Utc::now().with_timezone(&timezone()).naive_local()
+}
+
+/// `HH:MM` / `H時` / `H時M分` 形式の時刻をパースする
+pub fn parse_time(s: &str) -> Option<NaiveTime> {
+    let s = s.trim().replace('：', ":");
+    for fmt in ["%H:%M", "%H:%M:%S"] {
+        if let Ok(t) = NaiveTime::parse_from_str(&s, fmt) {
+            return t.with_second(0);
+        }
+    }
+    let rest = s.strip_suffix('分').unwrap_or(&s);
+    let (h, m) = match rest.split_once('時') {
+        Some((h, m)) => (h, if m.is_empty() { "0" } else { m }),
+        None => return None,
+    };
+    let m = if m == "半" { "30" } else { m };
+    NaiveTime::from_hms_opt(h.parse().ok()?, m.parse().ok()?, 0)
+}
+
+fn parse_date_word(s: &str, today: NaiveDate) -> Option<NaiveDate> {
+    match s {
+        "今日" | "きょう" => return Some(today),
+        "明日" | "あした" | "あす" => return today.succ_opt(),
+        "明後日" | "あさって" => return today.succ_opt()?.succ_opt(),
+        _ => {}
+    }
+
+    // 曜日（「金」「金曜」「金曜日」）→ 次に来るその曜日（今日と同じ曜日なら来週）
+    let day = s
+        .strip_suffix("曜日")
+        .or_else(|| s.strip_suffix('曜'))
+        .unwrap_or(s);
+    let weekday = match day {
+        "月" => Some(0),
+        "火" => Some(1),
+        "水" => Some(2),
+        "木" => Some(3),
+        "金" => Some(4),
+        "土" => Some(5),
+        "日" => Some(6),
+        _ => None,
+    };
+    if let Some(target) = weekday {
+        let current = today.weekday().num_days_from_monday() as i64;
+        let diff = (target - current).rem_euclid(7);
+        let diff = if diff == 0 { 7 } else { diff };
+        return Some(today + Duration::days(diff));
+    }
+
+    let s = s.replace('/', "-");
+    if let Ok(d) = NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+        return Some(d);
+    }
+    // 年を省略した「12/5」→ 今日以降で一番近いその日付
+    let (m, d) = s.split_once('-')?;
+    let (m, d) = (m.parse().ok()?, d.parse().ok()?);
+    let this_year = NaiveDate::from_ymd_opt(today.year(), m, d)?;
+    if this_year >= today {
+        Some(this_year)
+    } else {
+        NaiveDate::from_ymd_opt(today.year() + 1, m, d)
+    }
+}
+
+/// 宿題の期限入力をパースする
+///
+/// 日付: `今日` `明日` `明後日` / `金` `金曜` `金曜日` / `12/5` / `2025-12-05`
+/// 時刻（省略時は default_time）: `17:00` `17時` `17時30分`
+pub fn parse_due_input(
+    input: &str,
+    now: NaiveDateTime,
+    default_time: NaiveTime,
+) -> Option<NaiveDateTime> {
+    let input = input.trim().replace('　', " ");
+    let mut parts = input.split_whitespace();
+    let date_part = parts.next()?;
+    let time_part = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+
+    // 「明日17時」のように日付と時刻がくっついている場合も受け付ける
+    let (date_part, time_part) = match time_part {
+        Some(t) => (date_part.to_string(), Some(t.to_string())),
+        None => split_glued_time(date_part),
+    };
+
+    let date = parse_date_word(&date_part, now.date())?;
+    let time = match time_part {
+        Some(t) => parse_time(&t)?,
+        None => default_time,
+    };
+    Some(date.and_time(time))
+}
+
+/// now より後で最初に来る「weekday（0 = 月曜）の time」
+pub fn next_weekly(now: NaiveDateTime, weekday: u32, time: NaiveTime) -> NaiveDateTime {
+    let current = now.date().weekday().num_days_from_monday() as i64;
+    let diff = (weekday as i64 - current).rem_euclid(7);
+    let candidate = (now.date() + Duration::days(diff)).and_time(time);
+    if candidate > now {
+        candidate
+    } else {
+        candidate + Duration::days(7)
+    }
+}
+
+fn split_glued_time(s: &str) -> (String, Option<String>) {
+    for word in [
+        "明後日",
+        "あさって",
+        "今日",
+        "きょう",
+        "明日",
+        "あした",
+        "あす",
+    ] {
+        if let Some(rest) = s.strip_prefix(word).filter(|r| !r.is_empty()) {
+            return (word.to_string(), Some(rest.to_string()));
+        }
+    }
+    (s.to_string(), None)
 }
 
 /// 期限文字列を検証し、保存用の正規化フォーマットに変換する
@@ -120,6 +249,68 @@ mod tests {
         let naive = parse_due("2025-12-31 09:00").unwrap();
         let utc = local_to_utc(naive, chrono_tz::Asia::Tokyo).unwrap();
         assert_eq!(utc.format("%Y-%m-%d %H:%M").to_string(), "2025-12-31 00:00");
+    }
+
+    fn dt(s: &str) -> NaiveDateTime {
+        NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap()
+    }
+
+    #[test]
+    fn parses_homework_due_input() {
+        // 2025-10-09 は木曜日
+        let now = dt("2025-10-09 20:00");
+        let default = NaiveTime::from_hms_opt(8, 30, 0).unwrap();
+        let p =
+            |s: &str| parse_due_input(s, now, default).map(|d| d.format(DUE_FORMAT).to_string());
+
+        assert_eq!(p("明日").as_deref(), Some("2025-10-10 08:30"));
+        assert_eq!(p("今日 23:59").as_deref(), Some("2025-10-09 23:59"));
+        assert_eq!(p("明後日 17時").as_deref(), Some("2025-10-11 17:00"));
+        assert_eq!(p("明日17時半").as_deref(), Some("2025-10-10 17:30"));
+        assert_eq!(p("金").as_deref(), Some("2025-10-10 08:30"));
+        assert_eq!(p("月曜").as_deref(), Some("2025-10-13 08:30"));
+        assert_eq!(p("木曜日").as_deref(), Some("2025-10-16 08:30"));
+        assert_eq!(p("10/20 13:00").as_deref(), Some("2025-10-20 13:00"));
+        assert_eq!(p("1/7").as_deref(), Some("2026-01-07 08:30"));
+        assert_eq!(p("2025/12/24").as_deref(), Some("2025-12-24 08:30"));
+        assert_eq!(p("2025-12-24 9:05").as_deref(), Some("2025-12-24 09:05"));
+
+        assert_eq!(p("そのうち"), None);
+        assert_eq!(p("2/30"), None);
+        assert_eq!(p("明日 25:00"), None);
+        assert_eq!(p("明日 17:00 くらい"), None);
+    }
+
+    #[test]
+    fn next_weekly_occurrence() {
+        let t = NaiveTime::from_hms_opt(8, 30, 0).unwrap();
+        // 2025-10-09 は木曜日
+        let fmt = |d: NaiveDateTime| d.format(DUE_FORMAT).to_string();
+        assert_eq!(
+            fmt(next_weekly(dt("2025-10-09 20:00"), 0, t)),
+            "2025-10-13 08:30"
+        );
+        assert_eq!(
+            fmt(next_weekly(dt("2025-10-09 08:00"), 3, t)),
+            "2025-10-09 08:30"
+        );
+        assert_eq!(
+            fmt(next_weekly(dt("2025-10-09 08:30"), 3, t)),
+            "2025-10-16 08:30"
+        );
+    }
+
+    #[test]
+    fn parses_task_style_input() {
+        let now = dt("2025-10-09 20:00");
+        let midnight = NaiveTime::from_hms_opt(0, 0, 0).unwrap();
+        let p =
+            |s: &str| parse_due_input(s, now, midnight).map(|d| d.format(DUE_FORMAT).to_string());
+        assert_eq!(
+            p("2025-12-31 15:00:30").as_deref(),
+            Some("2025-12-31 15:00")
+        );
+        assert_eq!(p("2025-12-31").as_deref(), Some("2025-12-31 00:00"));
     }
 
     #[test]
