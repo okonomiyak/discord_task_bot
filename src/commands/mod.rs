@@ -3,7 +3,11 @@ use poise::serenity_prelude::{
     CreateInteractionResponse, CreateInteractionResponseMessage, GuildId,
 };
 
-use crate::{Context, Error, time::timezone};
+use crate::{
+    Context, Error,
+    models::HwSettings,
+    time::{DUE_FORMAT, local_now, parse_due_input, parse_time, timezone},
+};
 
 /// 一覧の1ページあたりの件数
 const PAGE_SIZE: usize = 10;
@@ -76,27 +80,45 @@ macro_rules! require_guild {
     };
 }
 
-/// 期限を検証・正規化する。不正な書式ならエラーを返信して呼び出し元を return させる
+/// 期限を検証・正規化する（`明日` `金曜` `12/5 13:00` なども可）。
+/// 不正な書式ならエラーを返信して呼び出し元を return させる
 macro_rules! require_valid_due {
-    ($ctx:expr, $due:expr) => {
+    ($ctx:expr, $guild_id:expr, $due:expr) => {
         match $due {
             None => None,
-            Some(raw) => match normalize_due(&raw) {
-                Some(due) => Some(due),
-                None => {
-                    reply_ephemeral(
-                        $ctx,
-                        format!(
-                            "期限 `{}` を解釈できませんでした。`YYYY-MM-DD HH:MM`（例: `2025-12-31 15:00`）の形式で指定してください。",
-                            raw
-                        ),
-                    )
-                    .await?;
-                    return Ok(());
+            Some(raw) => {
+                let settings = $ctx.data().db.hw_settings($guild_id.clone()).await?;
+                match parse_due_with(&raw, &settings) {
+                    Some(due) => Some(due),
+                    None => {
+                        reply_ephemeral(
+                            $ctx,
+                            format!(
+                                "期限 `{}` を解釈できませんでした。{}",
+                                raw,
+                                due_help(&settings)
+                            ),
+                        )
+                        .await?;
+                        return Ok(());
+                    }
                 }
-            },
+            }
         }
     };
+}
+
+/// 期限の入力をサーバー設定（時刻省略時の時刻）に従って解釈し、保存用フォーマットにする
+fn parse_due_with(input: &str, settings: &HwSettings) -> Option<String> {
+    let default_time = parse_time(&settings.default_time)?;
+    parse_due_input(input, local_now(), default_time).map(|d| d.format(DUE_FORMAT).to_string())
+}
+
+fn due_help(settings: &HwSettings) -> String {
+    format!(
+        "`明日` `明後日 17:00` `金曜` `12/5` `12/5 13:00` `2025-12-05` などで指定してください（時刻を省略すると {}）。",
+        settings.default_time
+    )
 }
 
 async fn reply_ephemeral(ctx: Context<'_>, content: impl Into<String>) -> Result<(), Error> {
@@ -221,7 +243,7 @@ async fn send_paginated(
 mod hw;
 mod task;
 
-pub use hw::hw;
+pub use hw::{done_buttons, handle_component, hw};
 pub use task::task;
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -299,8 +321,8 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
         .field(
             "期限の書式",
             format!(
-                "`YYYY-MM-DD HH:MM` （例: `2025-12-31 09:00`）\n\
-                 時刻を省略すると `00:00` 扱い、`/` 区切りも可\n\
+                "`明日` `金曜 17:00` `12/5` `2025-12-31 09:00` など\n\
+                 時刻を省略すると `/hw settings` の既定の時刻（初期値 08:30）\n\
                  時刻は **{}** として解釈される",
                 timezone()
             ),
@@ -330,12 +352,23 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
         )
         .field(
             "/hw done ・ /hw undo",
-            "自分の分を完了にする・取り消す（候補から選べます）",
+            "自分の分を完了にする・取り消す（候補から選べます）\n\
+             登録時・通知・まとめ投稿の ✅ ボタンでも完了にできます",
             false,
         )
         .field(
             "/hw view ・ /hw edit ・ /hw delete",
             "詳細と完了した人の表示・編集・削除（削除は登録者か管理者）",
+            false,
+        )
+        .field(
+            "/hw exam add ・ /hw exam list",
+            "テスト・小テストの予定を登録・表示（まとめ投稿と通知にも載ります）",
+            false,
+        )
+        .field(
+            "/hw repeat add ・ list ・ delete",
+            "毎週出る宿題を登録すると、期限が過ぎるたびに翌週の分を自動で登録",
             false,
         )
         .field(

@@ -1,12 +1,18 @@
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use super::Database;
-use crate::models::{Homework, HwQuery, HwSettings, HwSettingsPatch};
+use crate::models::{
+    Homework, HwKind, HwQuery, HwRepeat, HwSettings, HwSettingsPatch, NewHomework,
+};
 
 /// 宿題取得用の共通カラム（row_to_homework と順序を合わせること）
 const HW_COLUMNS: &str = "h.id, h.guild_id, h.channel_id, h.created_by, h.subject, h.title,
     h.description, h.due_date, h.created_at,
-    (SELECT GROUP_CONCAT(p.user_id) FROM hw_progress p WHERE p.homework_id = h.id)";
+    (SELECT GROUP_CONCAT(p.user_id) FROM hw_progress p WHERE p.homework_id = h.id),
+    h.kind, h.repeat_id";
+
+const REPEAT_COLUMNS: &str =
+    "id, guild_id, channel_id, created_by, subject, title, description, weekday, time, last_due";
 
 /// 宿題の変更項目（None は変更しない）
 #[derive(Debug, Default)]
@@ -65,33 +71,57 @@ pub(super) fn init(conn: &Connection) -> rusqlite::Result<()> {
             target        TEXT NOT NULL,
             remind_before INTEGER NOT NULL,
             PRIMARY KEY (homework_id, target, remind_before)
+        );
+
+        -- 毎週の宿題（last_due は最後に自動登録した宿題の期限）
+        CREATE TABLE IF NOT EXISTS hw_repeats (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            guild_id    TEXT NOT NULL,
+            channel_id  TEXT NOT NULL,
+            created_by  TEXT NOT NULL,
+            subject     TEXT NOT NULL,
+            title       TEXT NOT NULL,
+            description TEXT,
+            weekday     INTEGER NOT NULL,
+            time        TEXT NOT NULL,
+            last_due    TEXT
         );",
-    )
+    )?;
+
+    // 既存DBへの互換マイグレーション
+    let _ = conn.execute(
+        "ALTER TABLE homework ADD COLUMN kind TEXT NOT NULL DEFAULT 'homework'",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE homework ADD COLUMN repeat_id INTEGER", []);
+    Ok(())
+}
+
+fn insert(conn: &Connection, hw: &NewHomework) -> rusqlite::Result<i64> {
+    conn.execute(
+        "INSERT INTO homework
+            (kind, guild_id, channel_id, created_by, subject, title, description,
+             due_date, created_at, repeat_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            hw.kind.as_str(),
+            hw.guild_id,
+            hw.channel_id,
+            hw.created_by,
+            hw.subject,
+            hw.title,
+            hw.description,
+            hw.due_date,
+            chrono::Utc::now().timestamp(),
+            hw.repeat_id
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
 }
 
 impl Database {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn hw_add(
-        &self,
-        guild_id: String,
-        channel_id: String,
-        created_by: String,
-        subject: String,
-        title: String,
-        description: Option<String>,
-        due_date: String,
-    ) -> Result<i64, crate::Error> {
-        let created_at = chrono::Utc::now().timestamp();
-        self.call(move |conn| {
-            conn.execute(
-                "INSERT INTO homework
-                    (guild_id, channel_id, created_by, subject, title, description, due_date, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![guild_id, channel_id, created_by, subject, title, description, due_date, created_at],
-            )?;
-            Ok(conn.last_insert_rowid())
-        })
-        .await
+    pub async fn hw_add(&self, hw: NewHomework) -> Result<i64, crate::Error> {
+        self.call(move |conn| Ok(insert(conn, &hw)?)).await
     }
 
     pub async fn hw_get(
@@ -111,6 +141,10 @@ impl Database {
             let mut sql = format!("SELECT {HW_COLUMNS} FROM homework h WHERE h.guild_id = ?1");
             let mut args = vec![guild_id];
 
+            if let Some(kind) = query.kind {
+                args.push(kind.as_str().to_string());
+                sql += &format!(" AND h.kind = ?{}", args.len());
+            }
             if let Some(subject) = query.subject {
                 args.push(subject);
                 sql += &format!(" AND h.subject = ?{}", args.len());
@@ -383,6 +417,128 @@ impl Database {
         .await
     }
 
+    pub async fn hw_repeat_add(&self, repeat: HwRepeat) -> Result<i64, crate::Error> {
+        self.call(move |conn| {
+            conn.execute(
+                "INSERT INTO hw_repeats
+                    (guild_id, channel_id, created_by, subject, title, description, weekday, time)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    repeat.guild_id,
+                    repeat.channel_id,
+                    repeat.created_by,
+                    repeat.subject,
+                    repeat.title,
+                    repeat.description,
+                    repeat.weekday,
+                    repeat.time
+                ],
+            )?;
+            Ok(conn.last_insert_rowid())
+        })
+        .await
+    }
+
+    /// 毎週の宿題の設定一覧（guild_id が None なら全サーバー）
+    pub async fn hw_repeats(
+        &self,
+        guild_id: Option<String>,
+    ) -> Result<Vec<HwRepeat>, crate::Error> {
+        self.call(move |conn| {
+            let list = match guild_id {
+                Some(g) => conn
+                    .prepare(&format!(
+                        "SELECT {REPEAT_COLUMNS} FROM hw_repeats WHERE guild_id = ?1
+                         ORDER BY weekday, time, id"
+                    ))?
+                    .query_map(params![g], row_to_repeat)?
+                    .collect::<Result<Vec<_>, _>>()?,
+                None => conn
+                    .prepare(&format!("SELECT {REPEAT_COLUMNS} FROM hw_repeats"))?
+                    .query_map([], row_to_repeat)?
+                    .collect::<Result<Vec<_>, _>>()?,
+            };
+            Ok(list)
+        })
+        .await
+    }
+
+    pub async fn hw_repeat_get(
+        &self,
+        id: i64,
+        guild_id: String,
+    ) -> Result<Option<HwRepeat>, crate::Error> {
+        self.call(move |conn| {
+            Ok(conn
+                .query_row(
+                    &format!(
+                        "SELECT {REPEAT_COLUMNS} FROM hw_repeats WHERE id = ?1 AND guild_id = ?2"
+                    ),
+                    params![id, guild_id],
+                    row_to_repeat,
+                )
+                .optional()?)
+        })
+        .await
+    }
+
+    /// 毎週の宿題の設定を削除する（登録済みの宿題は残す）
+    pub async fn hw_repeat_delete(&self, id: i64, guild_id: String) -> Result<bool, crate::Error> {
+        self.call(move |conn| {
+            Ok(conn.execute(
+                "DELETE FROM hw_repeats WHERE id = ?1 AND guild_id = ?2",
+                params![id, guild_id],
+            )? > 0)
+        })
+        .await
+    }
+
+    /// 毎週の宿題から、指定の期限の宿題を登録する。
+    /// 既に同じかそれ以降の期限を登録済みなら何もしない（None）
+    pub async fn hw_repeat_generate(
+        &self,
+        repeat_id: i64,
+        due_date: String,
+    ) -> Result<Option<i64>, crate::Error> {
+        self.call(move |conn| {
+            let tx = conn.transaction()?;
+            let Some(r) = tx
+                .query_row(
+                    &format!("SELECT {REPEAT_COLUMNS} FROM hw_repeats WHERE id = ?1"),
+                    params![repeat_id],
+                    row_to_repeat,
+                )
+                .optional()?
+            else {
+                return Ok(None);
+            };
+            if r.last_due.as_ref().is_some_and(|last| *last >= due_date) {
+                return Ok(None);
+            }
+            let id = insert(
+                &tx,
+                &NewHomework {
+                    kind: HwKind::Homework,
+                    guild_id: r.guild_id,
+                    channel_id: r.channel_id,
+                    created_by: r.created_by,
+                    subject: r.subject,
+                    title: r.title,
+                    description: r.description,
+                    due_date: due_date.clone(),
+                    repeat_id: Some(repeat_id),
+                },
+            )?;
+            tx.execute(
+                "UPDATE hw_repeats SET last_due = ?1 WHERE id = ?2",
+                params![due_date, repeat_id],
+            )?;
+            tx.commit()?;
+            Ok(Some(id))
+        })
+        .await
+    }
+
     /// 通知を送信済みとして記録する。まだ記録がなければ true（＝今回送るべき）
     pub async fn hw_claim_notification(
         &self,
@@ -449,6 +605,21 @@ fn row_to_settings(row: &rusqlite::Row<'_>) -> rusqlite::Result<HwSettings> {
     })
 }
 
+fn row_to_repeat(row: &rusqlite::Row<'_>) -> rusqlite::Result<HwRepeat> {
+    Ok(HwRepeat {
+        id: row.get(0)?,
+        guild_id: row.get(1)?,
+        channel_id: row.get(2)?,
+        created_by: row.get(3)?,
+        subject: row.get(4)?,
+        title: row.get(5)?,
+        description: row.get(6)?,
+        weekday: row.get(7)?,
+        time: row.get(8)?,
+        last_due: row.get(9)?,
+    })
+}
+
 fn get(conn: &Connection, id: i64, guild_id: &str) -> rusqlite::Result<Option<Homework>> {
     conn.query_row(
         &format!("SELECT {HW_COLUMNS} FROM homework h WHERE h.id = ?1 AND h.guild_id = ?2"),
@@ -476,6 +647,8 @@ fn row_to_homework(row: &rusqlite::Row<'_>) -> rusqlite::Result<Homework> {
             .filter(|s| !s.is_empty())
             .map(str::to_string)
             .collect(),
+        kind: HwKind::from_str(&row.get::<_, String>(10)?),
+        repeat_id: row.get(11)?,
     })
 }
 
@@ -489,18 +662,119 @@ mod tests {
         db
     }
 
+    fn new_hw(kind: HwKind, guild: &str, subject: &str, due: &str) -> NewHomework {
+        NewHomework {
+            kind,
+            guild_id: guild.into(),
+            channel_id: "10".into(),
+            created_by: "1".into(),
+            subject: subject.into(),
+            title: format!("{subject}の宿題"),
+            description: None,
+            due_date: due.into(),
+            repeat_id: None,
+        }
+    }
+
     async fn add(db: &Database, guild: &str, subject: &str, due: &str) -> i64 {
-        db.hw_add(
-            guild.into(),
-            "10".into(),
-            "1".into(),
-            subject.into(),
-            format!("{subject}の宿題"),
-            None,
-            due.into(),
-        )
-        .await
-        .unwrap()
+        db.hw_add(new_hw(HwKind::Homework, guild, subject, due))
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn filters_by_kind() {
+        let db = test_db();
+        add(&db, "G", "数学", "2999-01-01 08:30").await;
+        db.hw_add(new_hw(HwKind::Exam, "G", "英語", "2999-01-02 08:30"))
+            .await
+            .unwrap();
+
+        let all = db.hw_list("G".into(), HwQuery::default()).await.unwrap();
+        assert_eq!(all.len(), 2);
+        let exams = db
+            .hw_list(
+                "G".into(),
+                HwQuery {
+                    kind: Some(HwKind::Exam),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(exams.len(), 1);
+        assert_eq!(exams[0].kind, HwKind::Exam);
+        assert_eq!(exams[0].label(), "📝 英語｜英語の宿題");
+    }
+
+    #[tokio::test]
+    async fn repeat_generates_each_due_once() {
+        let db = test_db();
+        let rid = db
+            .hw_repeat_add(HwRepeat {
+                id: 0,
+                guild_id: "G".into(),
+                channel_id: "10".into(),
+                created_by: "1".into(),
+                subject: "英語".into(),
+                title: "単語テスト".into(),
+                description: None,
+                weekday: 0,
+                time: "08:30".into(),
+                last_due: None,
+            })
+            .await
+            .unwrap();
+
+        let first = db
+            .hw_repeat_generate(rid, "2999-01-06 08:30".into())
+            .await
+            .unwrap();
+        assert!(first.is_some());
+        // 同じ期限・過去の期限では登録しない
+        assert!(
+            db.hw_repeat_generate(rid, "2999-01-06 08:30".into())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            db.hw_repeat_generate(rid, "2998-12-30 08:30".into())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            db.hw_repeat_generate(rid, "2999-01-13 08:30".into())
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let list = db.hw_list("G".into(), HwQuery::default()).await.unwrap();
+        assert_eq!(list.len(), 2);
+        assert!(
+            list.iter()
+                .all(|h| h.repeat_id == Some(rid) && h.title == "単語テスト")
+        );
+
+        assert!(db.hw_repeat_get(rid, "X".into()).await.unwrap().is_none());
+        assert!(!db.hw_repeat_delete(rid, "X".into()).await.unwrap());
+        assert!(db.hw_repeat_delete(rid, "G".into()).await.unwrap());
+        assert!(
+            db.hw_repeat_generate(rid, "2999-01-20 08:30".into())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        // 設定を消しても登録済みの宿題は残る
+        assert_eq!(
+            db.hw_list("G".into(), HwQuery::default())
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]

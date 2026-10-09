@@ -10,7 +10,9 @@ Rust で書かれた Discord サーバー向けのタスク・宿題管理ボッ
 
 - 誰か1人が登録すれば全員に共有。`/hw todo` で「自分がまだ終わっていない宿題」だけ見られる
 - 期限は `明日` `金曜` `12/5 13:00` のように気軽に書ける
-- `/hw done` は候補から選ぶだけ（ID を覚えなくていい）
+- `/hw done` は候補から選ぶだけ（ID を覚えなくていい）。登録時・通知・まとめ投稿の **✅ ボタン**でも完了にできる
+- テスト・小テストの予定も登録でき、まとめ投稿や通知に載る
+- 毎週出る宿題は一度設定すれば、翌週の分が自動で登録される
 - 通知はすべて自由に設定できる
   - サーバー: 期限前のチャンネル通知（初期値: 1日前）、毎日のまとめ投稿（初期値: オフ）
   - 個人: 自分が未完了の宿題だけ DM でお知らせ（初期値: オフ）
@@ -125,9 +127,13 @@ GitHub Actions で push / PR ごとに同じチェックが走ります。
 | `/hw todo [subject]` | 自分が未完了の宿題（直近1週間の期限切れも含む）。自分にだけ表示 |
 | `/hw list [subject] [past]` | これからの宿題一覧と完了人数。`past:true` で期限が過ぎたもの |
 | `/hw done id` / `/hw undo id` | 自分の分を完了にする／取り消す。`id` は入力すると候補が出る |
-| `/hw view id` | 詳細と完了した人 |
-| `/hw edit id ...` | 科目・内容・期限・メモを変更。期限を変えると通知も再設定 |
-| `/hw delete id` | 削除（登録した人か「メッセージの管理」権限がある人のみ） |
+| `/hw view id` | 詳細と完了した人（テストも可） |
+| `/hw edit id ...` | 科目・内容・期限・メモを変更（テストも可）。期限を変えると通知も再設定 |
+| `/hw delete id` | 削除（テストも可）。登録した人か「メッセージの管理」権限がある人のみ |
+| `/hw exam add subject title date [memo]` | テスト・小テストを登録する（完了の記録はなし） |
+| `/hw exam list [subject] [past]` | テストの予定 |
+| `/hw repeat add subject title weekday [time] [memo]` | 毎週の宿題を登録。今回の分をすぐ登録し、期限が過ぎるたびに翌週の分を自動登録 |
+| `/hw repeat list` / `/hw repeat delete id` | 毎週の宿題の一覧・停止（登録済みの宿題は残る） |
 | `/hw settings [channel] [remind] [summary] [default_time]` | サーバーの設定。何も指定しないと現在の設定を表示 |
 | `/hw notify [timing]` | 自分への DM 通知のタイミング（オフ / 1時間前〜1週間前） |
 
@@ -137,8 +143,10 @@ GitHub Actions で push / PR ごとに同じチェックが走ります。
 |------|--------|------|
 | `channel` | 宿題を登録したチャンネル | 通知・まとめ投稿の送り先 |
 | `remind` | 1日前 | 期限前にチャンネルへ通知（オフ可）。通知時刻より後に登録された宿題には送らない |
-| `summary` | オフ | `21:00` のように指定すると毎日その時刻に「今日／明日／1週間以内」の宿題をまとめて投稿。`オフ` で停止 |
-| `default_time` | 08:30 | 期限を `明日` のように日付だけで書いたときの時刻 |
+| `summary` | オフ | `21:00` のように指定すると毎日その時刻に「今日／明日／1週間以内」の宿題と2週間以内のテストをまとめて投稿（✅ ボタン付き）。`オフ` で停止 |
+| `default_time` | 08:30 | 期限を `明日` のように日付だけで書いたときの時刻（`/task` も共通） |
+
+✅ ボタンは押した人の分だけ完了になります（押した人にだけ結果が表示され、「取り消す」ボタンも出ます）。ボットを再起動した後や、DM のボタンでも使えます。
 
 **期限の書き方**
 
@@ -159,7 +167,7 @@ GitHub Actions で push / PR ごとに同じチェックが走ります。
 | `title` | ✅ | タスクのタイトル |
 | `description` | | 説明 |
 | `priority` | | 優先度（低/中/高、デフォルト: 中） |
-| `due_date` | | 期限（例: `2025-12-31 15:00`）。不正な書式はエラーになる |
+| `due_date` | | 期限（例: `明日` `金曜 17:00` `2025-12-31 15:00`）。不正な書式はエラーになる |
 | `assignee` | | 担当者 |
 | `remind1〜3` | | リマインダー（30分前/1時間前/3時間前/1日前/3日前/1週間前） |
 | `create_event` | | Discord スケジュールイベントも作成する（true/false） |
@@ -216,9 +224,11 @@ tasks
 homework
 ├── id, guild_id, channel_id, created_by
 ├── subject, title, description
-└── due_date, created_at (UNIX 秒)
+├── due_date, created_at (UNIX 秒)
+└── kind (homework / exam), repeat_id
 
 hw_progress      … 人ごとの完了 (homework_id, user_id, done_at)
+hw_repeats       … 毎週の宿題 (weekday, time, last_due …)
 hw_settings      … サーバーごとの設定
 hw_dm_settings   … 個人の DM 通知設定
 hw_sent          … 送信済み通知 (homework_id, target, remind_before)
@@ -236,11 +246,8 @@ assignees
 
 ## 期限の書式（/task）
 
-```
-YYYY-MM-DD HH:MM   （例: 2025-12-31 09:00）
-YYYY-MM-DD         （時刻省略時は 00:00 扱い）
-YYYY/MM/DD HH:MM   （/ 区切りも可）
-```
+`/hw` と同じ書き方が使えます（`明日` `金曜 17:00` `12/5` `2025-12-31 09:00` など）。
+時刻を省略すると `/hw settings` の `default_time`（初期値 08:30）になります。
 
 時刻は `TIMEZONE`（デフォルト `Asia/Tokyo`）の時刻として解釈されます。
 

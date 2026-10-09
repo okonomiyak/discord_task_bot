@@ -66,6 +66,19 @@ async fn main() {
                     }
                 })
             },
+            // 完了ボタンはメッセージが古くても・ボット再起動後でも押せるよう、イベントで受け取る
+            event_handler: |ctx, event, _framework, data| {
+                Box::pin(async move {
+                    if let serenity::FullEvent::InteractionCreate {
+                        interaction: serenity::Interaction::Component(component),
+                    } = event
+                        && let Err(e) = commands::handle_component(ctx, data, component).await
+                    {
+                        eprintln!("ボタン処理エラー: {:?}", e);
+                    }
+                    Ok(())
+                })
+            },
             ..Default::default()
         })
         .setup(|ctx, ready, framework| {

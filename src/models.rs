@@ -149,10 +149,50 @@ pub fn mentions(user_ids: &[String]) -> String {
         .join(" ")
 }
 
-/// 宿題（課題はサーバーで共有し、完了状態は人ごとに持つ）
+/// 宿題の種類
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HwKind {
+    /// 宿題（人ごとに完了を記録する）
+    Homework,
+    /// テスト・小テスト（完了の概念はない）
+    Exam,
+}
+
+impl HwKind {
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "exam" => Self::Exam,
+            _ => Self::Homework,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Homework => "homework",
+            Self::Exam => "exam",
+        }
+    }
+
+    pub fn emoji(&self) -> &'static str {
+        match self {
+            Self::Homework => "📘",
+            Self::Exam => "📝",
+        }
+    }
+
+    pub fn display(&self) -> &'static str {
+        match self {
+            Self::Homework => "宿題",
+            Self::Exam => "テスト",
+        }
+    }
+}
+
+/// 宿題・テスト（課題はサーバーで共有し、完了状態は人ごとに持つ）
 #[derive(Debug, Clone)]
 pub struct Homework {
     pub id: i64,
+    pub kind: HwKind,
     pub guild_id: String,
     pub channel_id: String,
     pub created_by: String,
@@ -165,6 +205,8 @@ pub struct Homework {
     pub created_at: i64,
     /// 完了したユーザー ID
     pub done_by: Vec<String>,
+    /// 毎週の宿題から自動登録された場合、その設定 ID
+    pub repeat_id: Option<i64>,
 }
 
 impl Homework {
@@ -172,15 +214,55 @@ impl Homework {
         self.done_by.iter().any(|u| u == user_id)
     }
 
-    /// 一覧などで使う「科目｜タイトル」形式の表示名
+    /// 一覧などで使う「科目｜タイトル」形式の表示名（テストは 📝 付き）
     pub fn label(&self) -> String {
-        format!("{}｜{}", self.subject, self.title)
+        match self.kind {
+            HwKind::Homework => format!("{}｜{}", self.subject, self.title),
+            HwKind::Exam => format!("📝 {}｜{}", self.subject, self.title),
+        }
     }
 }
+
+/// 新しく登録する宿題・テスト
+#[derive(Debug, Clone)]
+pub struct NewHomework {
+    pub kind: HwKind,
+    pub guild_id: String,
+    pub channel_id: String,
+    pub created_by: String,
+    pub subject: String,
+    pub title: String,
+    pub description: Option<String>,
+    /// 正規化済みの期限
+    pub due_date: String,
+    pub repeat_id: Option<i64>,
+}
+
+/// 毎週の宿題の設定
+#[derive(Debug, Clone, PartialEq)]
+pub struct HwRepeat {
+    pub id: i64,
+    pub guild_id: String,
+    pub channel_id: String,
+    pub created_by: String,
+    pub subject: String,
+    pub title: String,
+    pub description: Option<String>,
+    /// 曜日（0 = 月曜 〜 6 = 日曜）
+    pub weekday: u32,
+    /// 期限の時刻 `HH:MM`
+    pub time: String,
+    /// 最後に自動登録した宿題の期限
+    pub last_due: Option<String>,
+}
+
+pub const WEEKDAYS_JA: [&str; 7] = ["月", "火", "水", "木", "金", "土", "日"];
 
 /// 宿題一覧の条件
 #[derive(Debug, Clone, Default)]
 pub struct HwQuery {
+    /// 種類（None ならすべて）
+    pub kind: Option<HwKind>,
     pub subject: Option<String>,
     /// この期限以降（正規化フォーマット、含む）
     pub due_from: Option<String>,

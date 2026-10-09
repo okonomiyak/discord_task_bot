@@ -4,13 +4,14 @@ use poise::serenity_prelude::{
 };
 
 use super::{
-    RemindChoice, build_pages, guild, reply_ephemeral, reply_not_found, send_paginated, truncate,
+    RemindChoice, build_pages, due_help, guild, parse_due_with, reply_ephemeral, reply_not_found,
+    send_paginated, truncate,
 };
 use crate::{
     Context, Error,
     db::TaskEdit,
     models::{Priority, Task, TaskQuery, TaskSort, TaskStatus, mentions},
-    time::{due_to_utc, format_due, format_duration, normalize_due},
+    time::{due_to_utc, format_due, format_duration},
 };
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -264,7 +265,7 @@ pub async fn add(
     #[max_length = 1000]
     description: Option<String>,
     #[description = "優先度 (デフォルト: 中)"] priority: Option<PriorityChoice>,
-    #[description = "期限 (例: 2025-12-31 15:00)"] due_date: Option<String>,
+    #[description = "期限 (例: 明日 / 金曜 17:00 / 2025-12-31 15:00)"] due_date: Option<String>,
     #[description = "担当者"] assignee: Option<serenity::User>,
     #[description = "リマインダー1"] remind1: Option<RemindChoice>,
     #[description = "リマインダー2"] remind2: Option<RemindChoice>,
@@ -273,7 +274,7 @@ pub async fn add(
     create_event: Option<bool>,
 ) -> Result<(), Error> {
     let guild_id = require_guild!(ctx);
-    let due_date = require_valid_due!(ctx, due_date);
+    let due_date = require_valid_due!(ctx, guild_id, due_date);
 
     let reminders = collect_reminders(remind1, remind2, remind3);
     if !reminders.is_empty() && due_date.is_none() {
@@ -625,7 +626,9 @@ pub async fn edit(
     #[max_length = 1000]
     description: Option<String>,
     #[description = "新しい優先度"] priority: Option<PriorityChoice>,
-    #[description = "新しい期限 (例: 2025-12-31 15:00)"] due_date: Option<String>,
+    #[description = "新しい期限 (例: 明日 / 金曜 17:00 / 2025-12-31 15:00)"] due_date: Option<
+        String,
+    >,
     #[description = "リマインダー1 (指定するとリマインダーが全置き換え)"] remind1: Option<
         RemindChoice,
     >,
@@ -633,7 +636,7 @@ pub async fn edit(
     #[description = "リマインダー3"] remind3: Option<RemindChoice>,
 ) -> Result<(), Error> {
     let guild_id = require_guild!(ctx);
-    let due_date = require_valid_due!(ctx, due_date);
+    let due_date = require_valid_due!(ctx, guild_id, due_date);
 
     let remind_changed = remind1.is_some() || remind2.is_some() || remind3.is_some();
     if title.is_none()
