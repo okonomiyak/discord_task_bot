@@ -1,6 +1,10 @@
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use std::sync::{Arc, Mutex};
 
+mod homework;
+
+pub use homework::HwEdit;
+
 use crate::models::{PendingReminder, Priority, Task, TaskQuery, TaskSort, TaskStatus};
 use crate::time;
 
@@ -126,6 +130,8 @@ impl Database {
                 params![now],
             )?;
         }
+
+        homework::init(&conn)?;
 
         Ok(())
     }

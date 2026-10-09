@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod hw_notify;
 mod models;
 mod reminder;
 mod time;
@@ -38,7 +39,12 @@ async fn main() {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
-            commands: vec![commands::task(), commands::now(), commands::help()],
+            commands: vec![
+                commands::task(),
+                commands::hw(),
+                commands::now(),
+                commands::help(),
+            ],
             on_error: |err| {
                 Box::pin(async move {
                     match err {
