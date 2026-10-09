@@ -2,4 +2,11 @@ services:
   discord-task-bot:
     build: .
     restart: unless-stopped
-    env_file: .env          # DISCORD_TOKENなど
+    env_file: .env          # DISCORD_TOKEN などを設定
+    environment:
+      DATABASE_URL: /data/tasks.db
+    volumes:
+      - bot-data:/data      # コンテナを作り直してもタスクが消えないように永続化
+
+volumes:
+  bot-data:

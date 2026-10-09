@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod models;
 mod reminder;
+mod time;
 
 use std::sync::Arc;
 
@@ -22,8 +23,18 @@ async fn main() {
     let token = std::env::var("DISCORD_TOKEN").expect("DISCORD_TOKEN が設定されていません");
     let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "tasks.db".to_string());
 
+    let tz: chrono_tz::Tz = std::env::var("TIMEZONE")
+        .unwrap_or_else(|_| "Asia/Tokyo".to_string())
+        .parse()
+        .expect("TIMEZONE が無効です（例: Asia/Tokyo）");
+    time::init_timezone(tz);
+    println!("タイムゾーン: {}", tz);
+
     let database = db::Database::new(&db_path).expect("データベースのオープンに失敗しました");
-    database.init().expect("データベーススキーマの初期化に失敗しました");
+    database
+        .init()
+        .expect("データベーススキーマの初期化に失敗しました");
+    let db_for_reminder = database.clone();
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
@@ -41,7 +52,11 @@ async fn main() {
                                 )
                                 .await;
                         }
-                        err => eprintln!("フレームワークエラー: {:?}", err),
+                        err => {
+                            if let Err(e) = poise::builtins::on_error(err).await {
+                                eprintln!("エラーハンドリング中のエラー: {:?}", e);
+                            }
+                        }
                     }
                 })
             },
@@ -79,23 +94,8 @@ async fn main() {
         .await
         .expect("Discord クライアントの作成に失敗しました");
 
-    // リマインダーバックグラウンドタスク（60秒ごとにチェック）
-    let db_for_reminder = {
-        // Data はフレームワーク内にあるので、別途 DB を開く
-        let db_path = std::env::var("DATABASE_URL").unwrap_or_else(|_| "tasks.db".to_string());
-        db::Database::new(&db_path).expect("リマインダー用DBのオープンに失敗しました")
-    };
-    let http = Arc::clone(&client.http);
-
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
-        loop {
-            interval.tick().await;
-            if let Err(e) = reminder::check_reminders(&db_for_reminder, &http).await {
-                eprintln!("リマインダーチェックエラー: {:?}", e);
-            }
-        }
-    });
+    // リマインダー・期限切れ通知のバックグラウンドタスク（60秒ごとにチェック）
+    tokio::spawn(reminder::run(db_for_reminder, Arc::clone(&client.http)));
 
     client.start().await.expect("ボットの起動に失敗しました");
 }
