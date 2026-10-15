@@ -109,6 +109,17 @@ journalctl -u discord-task-bot -f   # ログ確認
 
 `.env` と `tasks.db` は `WorkingDirectory` から読み書きされます。
 
+### 二重起動の防止
+
+同じデータベースを使うボットを2つ起動すると、1回のコマンドが2回実行されてしまいます（宿題が2件登録されるなど）。
+そのため、2つ目は「既に起動しています」と表示して終了します（`tasks.db.lock` でロック）。
+古いプロセスが残っている場合は止めてから起動してください:
+
+```bash
+ps aux | grep discord_task_bot
+kill <PID>
+```
+
 ### 開発
 
 ```bash

@@ -17,6 +17,29 @@ pub struct Data {
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
 pub type Context<'a> = poise::Context<'a, Data, Error>;
 
+/// 同じ DB を使うボットが既に動いていないか確認し、ロックを取る。
+/// 返したファイルを保持している間ロックが続き、プロセス終了で自動的に解放される
+fn acquire_instance_lock(db_path: &str) -> Result<std::fs::File, String> {
+    let lock_path = format!("{db_path}.lock");
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|e| format!("ロックファイル {lock_path} を開けませんでした: {e}"))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(std::fs::TryLockError::WouldBlock) => Err(format!(
+            "同じデータベース ({db_path}) を使うボットが既に起動しています。\n\
+             二重に動かすとコマンドが2回実行されるため終了します。\n\
+             もう一方を止めてから起動してください（例: ps aux | grep discord_task_bot）。"
+        )),
+        Err(std::fs::TryLockError::Error(e)) => Err(format!(
+            "ロックファイル {lock_path} をロックできませんでした: {e}"
+        )),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
@@ -30,6 +53,15 @@ async fn main() {
         .expect("TIMEZONE が無効です（例: Asia/Tokyo）");
     time::init_timezone(tz);
     println!("タイムゾーン: {}", tz);
+
+    // 二重起動すると1回のコマンドが2回実行される（宿題が2件登録されるなど）ので防ぐ
+    let _instance_lock = match acquire_instance_lock(&db_path) {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
 
     let database = db::Database::new(&db_path).expect("データベースのオープンに失敗しました");
     database
@@ -117,4 +149,26 @@ async fn main() {
     tokio::spawn(reminder::run(db_for_reminder, Arc::clone(&client.http)));
 
     client.start().await.expect("ボットの起動に失敗しました");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn second_instance_is_rejected() {
+        let dir = std::env::temp_dir().join(format!("task_bot_lock_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("tasks.db").to_string_lossy().to_string();
+
+        let first = acquire_instance_lock(&db_path).expect("1つ目は起動できる");
+        let err = acquire_instance_lock(&db_path).expect_err("2つ目は拒否される");
+        assert!(err.contains("既に起動しています"));
+
+        // 1つ目が終了すれば起動できる
+        drop(first);
+        assert!(acquire_instance_lock(&db_path).is_ok());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
