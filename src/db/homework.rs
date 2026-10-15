@@ -14,6 +14,9 @@ const HW_COLUMNS: &str = "h.id, h.guild_id, h.channel_id, h.created_by, h.subjec
 const REPEAT_COLUMNS: &str =
     "id, guild_id, channel_id, created_by, subject, title, description, weekday, time, last_due";
 
+/// この秒数以内に同じ人が同じ内容を登録したら二重送信とみなす
+const DUPLICATE_WINDOW_SECS: i64 = 120;
+
 /// 宿題の変更項目（None は変更しない）
 #[derive(Debug, Default)]
 pub struct HwEdit {
@@ -120,8 +123,39 @@ fn insert(conn: &Connection, hw: &NewHomework) -> rusqlite::Result<i64> {
 }
 
 impl Database {
-    pub async fn hw_add(&self, hw: NewHomework) -> Result<i64, crate::Error> {
-        self.call(move |conn| Ok(insert(conn, &hw)?)).await
+    /// 宿題・テストを登録する。(ID, 新しく登録したか) を返す。
+    /// 同じ人が同じ内容（種類・科目・内容・期限）を直前に登録していた場合は、
+    /// 二重送信とみなして登録せず、既存の ID を返す
+    pub async fn hw_add(&self, hw: NewHomework) -> Result<(i64, bool), crate::Error> {
+        self.call(move |conn| {
+            let tx = conn.transaction()?;
+            let since = chrono::Utc::now().timestamp() - DUPLICATE_WINDOW_SECS;
+            let existing: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM homework
+                     WHERE guild_id = ?1 AND created_by = ?2 AND kind = ?3 AND subject = ?4
+                       AND title = ?5 AND due_date = ?6 AND created_at >= ?7
+                     ORDER BY id DESC LIMIT 1",
+                    params![
+                        hw.guild_id,
+                        hw.created_by,
+                        hw.kind.as_str(),
+                        hw.subject,
+                        hw.title,
+                        hw.due_date,
+                        since
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let result = match existing {
+                Some(id) => (id, false),
+                None => (insert(&tx, &hw)?, true),
+            };
+            tx.commit()?;
+            Ok(result)
+        })
+        .await
     }
 
     pub async fn hw_get(
@@ -680,6 +714,51 @@ mod tests {
         db.hw_add(new_hw(HwKind::Homework, guild, subject, due))
             .await
             .unwrap()
+            .0
+    }
+
+    #[tokio::test]
+    async fn duplicate_submission_is_ignored() {
+        let db = test_db();
+        let hw = new_hw(HwKind::Homework, "G", "数学", "2999-01-01 08:30");
+
+        let (first, created) = db.hw_add(hw.clone()).await.unwrap();
+        assert!(created);
+        let (second, created) = db.hw_add(hw.clone()).await.unwrap();
+        assert!(!created);
+        assert_eq!(first, second);
+        assert_eq!(
+            db.hw_list("G".into(), HwQuery::default())
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        // 期限・登録者・種類が違えば別の宿題として登録する
+        let other_due = NewHomework {
+            due_date: "2999-01-02 08:30".into(),
+            ..hw.clone()
+        };
+        assert!(db.hw_add(other_due).await.unwrap().1);
+        let other_user = NewHomework {
+            created_by: "2".into(),
+            ..hw.clone()
+        };
+        assert!(db.hw_add(other_user).await.unwrap().1);
+        let exam = NewHomework {
+            kind: HwKind::Exam,
+            ..hw.clone()
+        };
+        assert!(db.hw_add(exam).await.unwrap().1);
+
+        // 時間が経っていれば同じ内容でも登録する
+        db.conn
+            .lock()
+            .unwrap()
+            .execute("UPDATE homework SET created_at = created_at - 3600", [])
+            .unwrap();
+        assert!(db.hw_add(hw).await.unwrap().1);
     }
 
     #[tokio::test]

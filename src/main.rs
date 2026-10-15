@@ -98,6 +98,18 @@ async fn main() {
                     }
                 })
             },
+            // どのコマンドがいつ・何回届いたかを追えるようにログに残す
+            // （同じ ID が2回出れば二重処理、別の ID なら Discord から2回届いている）
+            pre_command: |ctx| {
+                Box::pin(async move {
+                    println!(
+                        "コマンド受信: /{} by {} (interaction {})",
+                        ctx.command().qualified_name,
+                        ctx.author().id,
+                        ctx.id()
+                    );
+                })
+            },
             // 完了ボタンはメッセージが古くても・ボット再起動後でも押せるよう、イベントで受け取る
             event_handler: |ctx, event, _framework, data| {
                 Box::pin(async move {

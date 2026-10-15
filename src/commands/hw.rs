@@ -447,8 +447,10 @@ async fn register(
     let Some(due_date) = require_valid_due!(ctx, guild_id, Some(due)) else {
         return Ok(());
     };
+    // 3秒以内に応答しないと Discord 側で失敗表示になり、再実行で二重登録されやすいので先に応答しておく
+    ctx.defer().await?;
 
-    let id = db
+    let (id, created) = db
         .hw_add(NewHomework {
             kind,
             guild_id: guild_id.clone(),
@@ -465,6 +467,15 @@ async fn register(
     let Some(hw) = db.hw_get(id, guild_id).await? else {
         return reply_hw_not_found(ctx, id).await;
     };
+    if !created {
+        ctx.say(format!(
+            "#{} {} はさっき登録済みなので、新しくは登録しませんでした。",
+            hw.id,
+            hw.label()
+        ))
+        .await?;
+        return Ok(());
+    }
     let reply = match kind {
         HwKind::Homework => poise::CreateReply::default()
             .embed(
