@@ -192,6 +192,28 @@ impl Database {
         .await
     }
 
+    /// 未完了で期限が until より前のタスク（期限切れを含む、期限順）。まとめ投稿用
+    pub async fn open_tasks_due_until(
+        &self,
+        guild_id: String,
+        until: String,
+    ) -> Result<Vec<Task>, crate::Error> {
+        self.call(move |conn| {
+            let sql = format!(
+                "SELECT {TASK_COLUMNS} FROM tasks t
+                 WHERE t.guild_id = ?1 AND t.status != 'Done'
+                   AND t.due_date IS NOT NULL AND t.due_date < ?2
+                 ORDER BY t.due_date, t.id"
+            );
+            let tasks = conn
+                .prepare(&sql)?
+                .query_map(params![guild_id, until], row_to_task)?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(tasks)
+        })
+        .await
+    }
+
     pub async fn list_tasks(
         &self,
         guild_id: String,
@@ -708,6 +730,28 @@ mod tests {
         let tasks = db.list_tasks("G".into(), query).await.unwrap();
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].title, "100% done");
+    }
+
+    #[tokio::test]
+    async fn open_tasks_due_until_skips_done_and_far_future() {
+        let db = test_db();
+        let overdue = add(&db, "G", "overdue", Priority::Low, Some("2000-01-01 00:00")).await;
+        let soon = add(&db, "G", "soon", Priority::Low, Some("2999-01-02 00:00")).await;
+        add(&db, "G", "later", Priority::Low, Some("2999-02-01 00:00")).await;
+        add(&db, "G", "no due", Priority::Low, None).await;
+        let done = add(&db, "G", "done", Priority::Low, Some("2999-01-01 00:00")).await;
+        db.update_task_status(done, "G".into(), TaskStatus::Done)
+            .await
+            .unwrap();
+
+        let ids: Vec<_> = db
+            .open_tasks_due_until("G".into(), "2999-01-08 00:00".into())
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+        assert_eq!(ids, [overdue, soon]);
     }
 
     #[tokio::test]

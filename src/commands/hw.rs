@@ -998,7 +998,7 @@ fn settings_embed(s: &HwSettings) -> CreateEmbed {
     let summary = match (&s.summary_time, &s.channel_id) {
         (None, _) => "オフ".to_string(),
         (Some(t), Some(_)) => format!("毎日 {t}"),
-        (Some(t), None) => format!("毎日 {t}（⚠️ 通知チャンネルが未設定のため投稿されません）"),
+        (Some(t), None) => format!("毎日 {t}（最後に宿題・タスクを登録したチャンネルへ）"),
     };
     CreateEmbed::new()
         .title("⚙️ 宿題の設定")
@@ -1025,7 +1025,9 @@ pub async fn settings(
     #[channel_types("Text")]
     channel: Option<serenity::GuildChannel>,
     #[description = "期限前にチャンネルへ通知するタイミング"] remind: Option<HwRemindChoice>,
-    #[description = "毎日のまとめ投稿の時刻（例: 21:00 / オフ）"] summary: Option<String>,
+    #[description = "毎日のまとめ投稿の時刻（初期値 21:00、例: 7:30 / オフ）"] summary: Option<
+        String,
+    >,
     #[description = "期限の時刻を省略したときの時刻（例: 08:30）"] default_time: Option<String>,
 ) -> Result<(), Error> {
     let guild_id = require_guild!(ctx);

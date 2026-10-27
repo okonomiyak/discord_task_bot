@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use poise::serenity_prelude::{
     ChannelId, Colour, CreateEmbed, CreateEmbedFooter, CreateMessage, Http, UserId,
 };
@@ -10,7 +10,7 @@ use crate::{
     Error,
     commands::done_buttons,
     db::Database,
-    models::{Homework, HwKind, HwQuery, HwSettings, WEEKDAYS_JA},
+    models::{Homework, HwKind, HwQuery, HwSettings, Task, WEEKDAYS_JA, mentions},
     time::{DUE_FORMAT, due_to_utc, local_now, next_weekly, parse_time},
 };
 
@@ -199,27 +199,28 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
 // 毎日のまとめ投稿
 // ────────────────────────────────────────────────────────────────────────────
 
-/// 毎日のまとめ投稿
+/// 毎日のまとめ投稿（宿題・テスト・タスク）
 pub async fn check_summaries(db: &Database, http: &Arc<Http>) -> Result<(), Error> {
     let now = local_now();
     let today = now.date();
     let today_str = today.format("%Y-%m-%d").to_string();
+    let days_later = |days: i64| {
+        (today + Duration::days(days + 1))
+            .and_hms_opt(0, 0, 0)
+            .unwrap_or(now)
+            .format(DUE_FORMAT)
+            .to_string()
+    };
     let range = |days: i64| HwQuery {
         due_from: Some(now.format(DUE_FORMAT).to_string()),
-        due_until: Some(
-            (today + Duration::days(days + 1))
-                .and_hms_opt(0, 0, 0)
-                .unwrap_or(now)
-                .format(DUE_FORMAT)
-                .to_string(),
-        ),
+        due_until: Some(days_later(days)),
         ..Default::default()
     };
 
-    for s in db.hw_summary_settings().await? {
-        let (Some(time), Some(channel)) = (
+    for (s, channel) in db.hw_summary_targets().await? {
+        let (Some(time), Ok(channel)) = (
             s.summary_time.as_deref().and_then(parse_time),
-            s.channel_id.as_deref().and_then(|c| c.parse::<u64>().ok()),
+            channel.parse::<u64>(),
         ) else {
             continue;
         };
@@ -253,10 +254,13 @@ pub async fn check_summaries(db: &Database, http: &Arc<Http>) -> Result<(), Erro
                 },
             )
             .await?;
+        let tasks = db
+            .open_tasks_due_until(s.guild_id.clone(), days_later(SUMMARY_DAYS))
+            .await?;
 
         // ボタンは期限が近い宿題から（最大25個）
         let msg = CreateMessage::new()
-            .embed(summary_embed(&homework, &exams, today))
+            .embed(summary_embed(&homework, &exams, &tasks, now))
             .components(done_buttons(&homework, true));
         if let Err(e) = ChannelId::new(channel).send_message(http, msg).await {
             eprintln!("まとめ投稿の送信エラー (guild {}): {:?}", s.guild_id, e);
@@ -279,17 +283,48 @@ fn join_lines(lines: &[String]) -> String {
     value
 }
 
-fn summary_embed(homework: &[Homework], exams: &[Homework], today: NaiveDate) -> CreateEmbed {
+fn task_line(task: &Task, now: &str) -> String {
+    let due = task.due_date.as_deref().unwrap_or("");
+    let unix = due_to_utc(due).map(|d| d.timestamp()).unwrap_or(0);
+    let overdue = if due < now {
+        "⚠️ 期限切れ "
+    } else {
+        ""
+    };
+    let who = if task.assignees.is_empty() {
+        String::new()
+    } else {
+        format!("（担当: {}）", mentions(&task.assignees))
+    };
+    format!(
+        "{overdue}`#{}` {} {}｜{} — <t:{unix}:f>（<t:{unix}:R>）{who}",
+        task.id,
+        task.status.emoji(),
+        task.priority.emoji(),
+        task.title,
+    )
+}
+
+fn summary_embed(
+    homework: &[Homework],
+    exams: &[Homework],
+    tasks: &[Task],
+    now: NaiveDateTime,
+) -> CreateEmbed {
+    let today = now.date();
     let title = format!(
-        "📚 宿題まとめ（{}/{} {}）",
+        "📅 今日のまとめ（{}/{} {}）",
         today.month(),
         today.day(),
         WEEKDAYS_JA[today.weekday().num_days_from_monday() as usize]
     );
     let mut embed = CreateEmbed::new().title(title).colour(Colour(0x9B59B6));
 
-    if homework.is_empty() && exams.is_empty() {
-        return embed.description(format!("今後{}日間の宿題はありません 🎉", SUMMARY_DAYS));
+    if homework.is_empty() && exams.is_empty() && tasks.is_empty() {
+        return embed.description(format!(
+            "今後{}日間の宿題・テスト・タスクはありません 🎉",
+            SUMMARY_DAYS
+        ));
     }
 
     let today_str = today.format("%Y-%m-%d").to_string();
@@ -299,9 +334,9 @@ fn summary_embed(homework: &[Homework], exams: &[Homework], today: NaiveDate) ->
         .format("%Y-%m-%d")
         .to_string();
     let mut groups: [(&str, Vec<String>); 3] = [
-        ("🔴 今日まで", vec![]),
-        ("🟡 明日まで", vec![]),
-        ("🟢 1週間以内", vec![]),
+        ("🔴 宿題：今日まで", vec![]),
+        ("🟡 宿題：明日まで", vec![]),
+        ("🟢 宿題：1週間以内", vec![]),
     ];
     for hw in homework {
         let date = hw.due_date.get(..10).unwrap_or("");
@@ -328,8 +363,17 @@ fn summary_embed(homework: &[Homework], exams: &[Homework], today: NaiveDate) ->
             false,
         );
     }
+    if !tasks.is_empty() {
+        let now_str = now.format(DUE_FORMAT).to_string();
+        let lines: Vec<String> = tasks.iter().map(|t| task_line(t, &now_str)).collect();
+        embed = embed.field(
+            format!("📋 タスク（期限切れ・{}日以内）", SUMMARY_DAYS),
+            join_lines(&lines),
+            false,
+        );
+    }
     embed.footer(CreateEmbedFooter::new(
-        "ボタンで自分の分を完了にできます / 自分の未完了は /hw todo",
+        "ボタンで自分の分を完了にできます / 自分の未完了は /hw todo / 時刻の変更は /hw settings",
     ))
 }
 
@@ -388,6 +432,90 @@ mod tests {
 
         assert!(!should_notify(due, day, created, now, true));
         assert!(should_notify(due, day, created, now, false));
+    }
+
+    fn hw(id: i64, kind: HwKind, due: &str) -> Homework {
+        Homework {
+            id,
+            kind,
+            guild_id: "G".into(),
+            channel_id: "1".into(),
+            created_by: "1".into(),
+            subject: "数学".into(),
+            title: format!("課題{id}"),
+            description: None,
+            due_date: due.into(),
+            created_at: 0,
+            done_by: vec![],
+            repeat_id: None,
+        }
+    }
+
+    fn task(id: i64, due: &str) -> Task {
+        Task {
+            id,
+            user_id: "1".into(),
+            guild_id: "G".into(),
+            title: format!("タスク{id}"),
+            description: None,
+            status: crate::models::TaskStatus::Pending,
+            priority: crate::models::Priority::High,
+            due_date: Some(due.into()),
+            created_at: String::new(),
+            channel_id: None,
+            reminders: vec![],
+            discord_event_id: None,
+            assignees: vec!["7".into()],
+        }
+    }
+
+    fn embed_json(embed: CreateEmbed) -> serde_json::Value {
+        serde_json::to_value(embed).unwrap()
+    }
+
+    #[test]
+    fn summary_groups_homework_exams_and_tasks() {
+        // 2025-10-09 は木曜日
+        let now =
+            chrono::NaiveDateTime::parse_from_str("2025-10-09 21:00", "%Y-%m-%d %H:%M").unwrap();
+        let homework = [
+            hw(1, HwKind::Homework, "2025-10-09 23:59"),
+            hw(2, HwKind::Homework, "2025-10-10 08:30"),
+            hw(3, HwKind::Homework, "2025-10-14 08:30"),
+        ];
+        let exams = [hw(4, HwKind::Exam, "2025-10-20 10:40")];
+        let tasks = [task(5, "2025-10-01 00:00"), task(6, "2025-10-11 12:00")];
+
+        let json = embed_json(summary_embed(&homework, &exams, &tasks, now));
+        assert_eq!(json["title"], "📅 今日のまとめ（10/9 木）");
+        let fields = json["fields"].as_array().unwrap();
+        let names: Vec<_> = fields.iter().map(|f| f["name"].as_str().unwrap()).collect();
+        assert_eq!(
+            names,
+            [
+                "🔴 宿題：今日まで",
+                "🟡 宿題：明日まで",
+                "🟢 宿題：1週間以内",
+                "📝 テスト（14日以内）",
+                "📋 タスク（期限切れ・7日以内）",
+            ]
+        );
+        let task_field = fields[4]["value"].as_str().unwrap();
+        assert!(task_field.contains("⚠️ 期限切れ `#5`"));
+        assert!(task_field.contains("`#6`") && !task_field.contains("⚠️ 期限切れ `#6`"));
+        assert!(task_field.contains("担当: <@7>"));
+    }
+
+    #[test]
+    fn summary_says_so_when_empty() {
+        let now =
+            chrono::NaiveDateTime::parse_from_str("2025-10-09 21:00", "%Y-%m-%d %H:%M").unwrap();
+        let json = embed_json(summary_embed(&[], &[], &[], now));
+        assert!(json["description"].as_str().unwrap().contains("ありません"));
+        assert!(
+            json.get("fields")
+                .is_none_or(|f| f.as_array().is_some_and(|a| a.is_empty()))
+        );
     }
 
     #[test]

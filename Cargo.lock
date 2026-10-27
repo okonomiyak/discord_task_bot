@@ -342,6 +342,7 @@ dependencies = [
  "dotenvy",
  "poise",
  "rusqlite",
+ "serde_json",
  "tokio",
 ]
 

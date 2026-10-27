@@ -50,7 +50,8 @@ pub(super) fn init(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (homework_id, user_id)
         );
 
-        -- サーバーごとの設定（remind_before = 0 で事前通知オフ、summary_time NULL でまとめ投稿オフ）
+        -- サーバーごとの設定
+        -- remind_before = 0 で事前通知オフ、summary_time は 'off' でまとめ投稿オフ（NULL は初期値）
         CREATE TABLE IF NOT EXISTS hw_settings (
             guild_id          TEXT PRIMARY KEY,
             channel_id        TEXT,
@@ -346,16 +347,35 @@ impl Database {
         .await
     }
 
-    /// まとめ投稿が有効なサーバーの設定
-    pub async fn hw_summary_settings(&self) -> Result<Vec<HwSettings>, crate::Error> {
+    /// まとめ投稿の対象（設定, 投稿先チャンネル）。
+    /// 宿題・タスク・設定のどれかがあるサーバーのうち、まとめ投稿がオンのもの。
+    /// 投稿先が設定されていなければ、最後に宿題かタスクを登録したチャンネルにする
+    pub async fn hw_summary_targets(&self) -> Result<Vec<(HwSettings, String)>, crate::Error> {
         self.call(|conn| {
-            let list = conn
-                .prepare(&format!(
-                    "SELECT {SETTINGS_COLUMNS} FROM hw_settings WHERE summary_time IS NOT NULL"
-                ))?
-                .query_map([], row_to_settings)?
-                .collect::<Result<Vec<_>, _>>()?;
-            Ok(list)
+            let guilds: Vec<String> = conn
+                .prepare(
+                    "SELECT guild_id FROM hw_settings
+                     UNION SELECT guild_id FROM homework
+                     UNION SELECT guild_id FROM tasks",
+                )?
+                .query_map([], |row| row.get(0))?
+                .collect::<Result<_, _>>()?;
+
+            let mut targets = vec![];
+            for guild_id in guilds {
+                let s = settings(conn, &guild_id)?;
+                if s.summary_time.is_none() {
+                    continue;
+                }
+                let channel = match &s.channel_id {
+                    Some(c) => Some(c.clone()),
+                    None => latest_channel(conn, &guild_id)?,
+                };
+                if let Some(channel) = channel {
+                    targets.push((s, channel));
+                }
+            }
+            Ok(targets)
         })
         .await
     }
@@ -366,10 +386,12 @@ impl Database {
         date: String,
     ) -> Result<(), crate::Error> {
         self.call(move |conn| {
-            conn.execute(
-                "UPDATE hw_settings SET last_summary_date = ?1 WHERE guild_id = ?2",
-                params![date, guild_id],
-            )?;
+            // 設定の行がまだないサーバーもあるので、読み込んでから保存する
+            let tx = conn.transaction()?;
+            let mut s = settings(&tx, &guild_id)?;
+            s.last_summary_date = Some(date);
+            save_settings(&tx, &s)?;
+            tx.commit()?;
             Ok(())
         })
         .await
@@ -591,6 +613,30 @@ impl Database {
     }
 }
 
+/// DB 上でまとめ投稿オフを表す値（NULL は「未設定 = 初期値」）
+const SUMMARY_OFF: &str = "off";
+
+/// 最後に宿題かタスクを登録したチャンネル
+fn latest_channel(conn: &Connection, guild_id: &str) -> rusqlite::Result<Option<String>> {
+    let from_homework: Option<String> = conn
+        .query_row(
+            "SELECT channel_id FROM homework WHERE guild_id = ?1 ORDER BY id DESC LIMIT 1",
+            params![guild_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if from_homework.is_some() {
+        return Ok(from_homework);
+    }
+    conn.query_row(
+        "SELECT channel_id FROM tasks WHERE guild_id = ?1 AND channel_id IS NOT NULL
+             ORDER BY id DESC LIMIT 1",
+        params![guild_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
 const SETTINGS_COLUMNS: &str =
     "guild_id, channel_id, remind_before, summary_time, default_time, last_summary_date";
 
@@ -619,7 +665,7 @@ fn save_settings(conn: &Connection, s: &HwSettings) -> rusqlite::Result<()> {
             s.guild_id,
             s.channel_id,
             s.remind_before.unwrap_or(0),
-            s.summary_time,
+            s.summary_time.as_deref().unwrap_or(SUMMARY_OFF),
             s.default_time,
             s.last_summary_date
         ],
@@ -629,11 +675,17 @@ fn save_settings(conn: &Connection, s: &HwSettings) -> rusqlite::Result<()> {
 
 fn row_to_settings(row: &rusqlite::Row<'_>) -> rusqlite::Result<HwSettings> {
     let remind_before: i64 = row.get(2)?;
+    let summary_time: Option<String> = row.get(3)?;
+    let summary_time = match summary_time.as_deref() {
+        None => Some(HwSettings::DEFAULT_SUMMARY_TIME.to_string()),
+        Some(SUMMARY_OFF) => None,
+        Some(t) => Some(t.to_string()),
+    };
     Ok(HwSettings {
         guild_id: row.get(0)?,
         channel_id: row.get(1)?,
         remind_before: (remind_before > 0).then_some(remind_before),
-        summary_time: row.get(3)?,
+        summary_time,
         default_time: row.get(4)?,
         last_summary_date: row.get(5)?,
     })
@@ -974,7 +1026,64 @@ mod tests {
             .unwrap();
         assert_eq!(s.remind_before, None);
         assert_eq!(db.hw_settings("G".into()).await.unwrap(), s);
-        assert_eq!(db.hw_summary_settings().await.unwrap(), vec![s]);
+        assert_eq!(
+            db.hw_summary_targets().await.unwrap(),
+            vec![(s, "99".to_string())]
+        );
+
+        // オフにしたら対象外
+        db.hw_update_settings(
+            "G".into(),
+            HwSettingsPatch {
+                summary_time: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(db.hw_settings("G".into()).await.unwrap().summary_time, None);
+        assert!(db.hw_summary_targets().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn summary_is_on_by_default_and_posts_to_latest_channel() {
+        let db = test_db();
+        // 何もないサーバーは対象外
+        assert!(db.hw_summary_targets().await.unwrap().is_empty());
+
+        // タスクだけあるサーバーは、タスクを登録したチャンネルへ
+        db.add_task(
+            "1".into(),
+            "T".into(),
+            "300".into(),
+            "t".into(),
+            None,
+            crate::models::Priority::Medium,
+            None,
+            vec![],
+        )
+        .await
+        .unwrap();
+        // 宿題があるサーバーは、最後に宿題を登録したチャンネルへ
+        add(&db, "G", "数学", "2999-01-01 08:30").await;
+        let mut targets = db.hw_summary_targets().await.unwrap();
+        targets.sort_by(|a, b| a.0.guild_id.cmp(&b.0.guild_id));
+        let summary: Vec<_> = targets
+            .iter()
+            .map(|(s, c)| (s.guild_id.as_str(), s.summary_time.as_deref(), c.as_str()))
+            .collect();
+        assert_eq!(
+            summary,
+            [("G", Some("21:00"), "10"), ("T", Some("21:00"), "300")]
+        );
+
+        // 投稿日を記録すると、設定の行がなくても保存される
+        db.hw_set_last_summary_date("T".into(), "2999-01-01".into())
+            .await
+            .unwrap();
+        let s = db.hw_settings("T".into()).await.unwrap();
+        assert_eq!(s.last_summary_date.as_deref(), Some("2999-01-01"));
+        assert_eq!(s.summary_time.as_deref(), Some("21:00"));
     }
 
     #[tokio::test]
