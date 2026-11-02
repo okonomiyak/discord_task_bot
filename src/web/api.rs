@@ -4,17 +4,19 @@ use axum::{
     http::StatusCode,
     routing::{get, patch, post},
 };
-use poise::serenity_prelude::{ChannelId, CreateAllowedMentions, CreateMessage};
+use poise::serenity_prelude::{ChannelId, CreateMessage};
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState, Auth, WebGuild};
 use crate::{
     commands::{delete_event, done_buttons, sync_event},
     db::{HwEdit, TaskEdit},
+    hw_notify::{role_allowed_mentions, with_role_mention},
     models::{
         Homework, HwKind, HwQuery, HwSettings, NewHomework, Priority, Task, TaskQuery, TaskSort,
         TaskStatus,
     },
+    stats::{self as hw_stats, HwStats, StatsPeriod},
     time::{DUE_FORMAT, due_to_utc, local_now, parse_due_input, parse_time},
 };
 
@@ -27,6 +29,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me", get(me))
         .route("/guilds/{gid}/subjects", get(subjects))
+        .route("/guilds/{gid}/stats", get(stats))
         .route(
             "/guilds/{gid}/homework",
             get(list_homework).post(create_homework),
@@ -93,14 +96,20 @@ fn due_unix(due: &str) -> i64 {
 }
 
 /// Discord のチャンネルにも投稿する（メンションで通知は飛ばさない）
-async fn announce(state: &AppState, channel: Option<&str>, msg: CreateMessage) {
+/// settings を渡すと、その通知ロールだけを鳴らす（None なら誰も鳴らさない）
+async fn announce(
+    state: &AppState,
+    channel: Option<&str>,
+    msg: CreateMessage,
+    settings: Option<&HwSettings>,
+) {
     let Some(id) = channel
         .and_then(|c| c.parse::<u64>().ok())
         .filter(|id| *id > 0)
     else {
         return;
     };
-    let msg = msg.allowed_mentions(CreateAllowedMentions::new());
+    let msg = msg.allowed_mentions(role_allowed_mentions(settings));
     if let Err(e) = ChannelId::new(id).send_message(&state.http, msg).await {
         eprintln!("Web からの登録の投稿に失敗しました: {e:?}");
     }
@@ -162,6 +171,49 @@ async fn subjects(
 ) -> ApiResult<Vec<String>> {
     auth.guild(&state, &gid)?;
     Ok(Json(state.db.hw_subjects(gid).await?))
+}
+
+#[derive(Deserialize)]
+struct StatsQuery {
+    /// week / month / all（省略時 month）
+    period: Option<String>,
+}
+
+#[derive(Serialize)]
+struct StatsDto {
+    label: String,
+    #[serde(flatten)]
+    stats: HwStats,
+}
+
+/// ログインしている人の宿題の達成率
+async fn stats(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(gid): Path<String>,
+    Query(q): Query<StatsQuery>,
+) -> ApiResult<StatsDto> {
+    auth.guild(&state, &gid)?;
+    let period = StatsPeriod::from_str(q.period.as_deref().unwrap_or("month"))
+        .ok_or_else(|| ApiError::bad_request("period は week / month / all のどれかです"))?;
+    let now = local_now();
+    let (due_from, due_until, label) = period.range(now);
+    let list = state
+        .db
+        .hw_list(
+            gid,
+            HwQuery {
+                kind: Some(HwKind::Homework),
+                due_from,
+                due_until,
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(Json(StatsDto {
+        label,
+        stats: hw_stats::compute(&list, &auth.user_id, now),
+    }))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -321,9 +373,9 @@ async fn create_homework(
             u = due_unix(&hw.due_date),
         );
         let msg = CreateMessage::new()
-            .content(content)
+            .content(with_role_mention(Some(&settings), content))
             .components(done_buttons(std::slice::from_ref(&hw), false));
-        announce(&state, channel.as_deref(), msg).await;
+        announce(&state, channel.as_deref(), msg, Some(&settings)).await;
     }
 
     let status = if created {
@@ -575,7 +627,7 @@ async fn create_task(
         task.title,
         due
     ));
-    announce(&state, channel.as_deref(), msg).await;
+    announce(&state, channel.as_deref(), msg, None).await;
 
     Ok((StatusCode::CREATED, Json(task_dto(task))))
 }

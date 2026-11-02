@@ -358,6 +358,84 @@ async fn homework_flow_add_done_edit_delete() {
 }
 
 #[tokio::test]
+async fn stats_reports_personal_rate() {
+    let state = test_state();
+    let alice = login_as(&state, "1", false).await;
+    let base = format!("/api/guilds/{GUILD}/homework");
+    for (subject, due) in [
+        ("数学", "2999-01-05"),
+        ("数学", "2999-01-06"),
+        ("英語", "2999-01-07"),
+    ] {
+        call(
+            &state,
+            "POST",
+            &base,
+            Some(&alice),
+            Some(json!({ "subject": subject, "title": due, "due": due })),
+        )
+        .await;
+    }
+    call(
+        &state,
+        "POST",
+        &base,
+        Some(&alice),
+        Some(json!({ "kind": "exam", "subject": "英語", "title": "t", "due": "2999-01-08" })),
+    )
+    .await;
+    call(
+        &state,
+        "POST",
+        &format!("{base}/1/done"),
+        Some(&alice),
+        Some(json!({ "done": true })),
+    )
+    .await;
+
+    let (status, s) = call(
+        &state,
+        "GET",
+        &format!("/api/guilds/{GUILD}/stats?period=all"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(s["label"], "これまでの全期間");
+    assert_eq!(s["overall"], json!({ "done": 1, "total": 3 }));
+    assert_eq!(s["upcoming"], json!({ "done": 1, "total": 3 }));
+    assert_eq!(
+        s["by_subject"][0],
+        json!({ "subject": "数学", "done": 1, "total": 2 })
+    );
+
+    // 他の人から見ると 0%
+    let bob = login_as(&state, "2", false).await;
+    let (_, s) = call(
+        &state,
+        "GET",
+        &format!("/api/guilds/{GUILD}/stats?period=all"),
+        Some(&bob),
+        None,
+    )
+    .await;
+    assert_eq!(s["overall"], json!({ "done": 0, "total": 3 }));
+
+    let (status, _) = call(
+        &state,
+        "GET",
+        &format!("/api/guilds/{GUILD}/stats?period=year"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = call(&state, "GET", "/api/guilds/999/stats", Some(&alice), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn task_flow_add_status_edit_delete() {
     let state = test_state();
     let cookie = login_as(&state, "1", false).await;

@@ -377,8 +377,19 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
             false,
         )
         .field(
+            "/hw stats",
+            "自分の宿題の達成率（今週・今月・全期間、科目別）を表示",
+            false,
+        )
+        .field(
             "/hw notify",
             "自分が未完了の宿題を期限前に DM で知らせてもらう",
+            false,
+        )
+        .field(
+            "/hw role setup ・ /hw role remove",
+            "課題通知ロールを作成して、付け外しボタンを投稿（要: ロールの管理）\n\
+             登録・期限前の通知・まとめ投稿でこのロールをメンションします",
             false,
         )
         .field(
