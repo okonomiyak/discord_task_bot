@@ -12,6 +12,7 @@ use crate::{
     models::{
         Homework, HwKind, HwQuery, HwRepeat, HwSettings, HwSettingsPatch, NewHomework, WEEKDAYS_JA,
     },
+    stats::{self, StatsPeriod},
     time::{DUE_FORMAT, format_due, format_duration, local_now, next_weekly, parse_time, timezone},
 };
 
@@ -407,7 +408,7 @@ fn repeat_label(r: &HwRepeat) -> String {
 #[poise::command(
     slash_command,
     subcommands(
-        "add", "todo", "list", "done", "undo", "view", "edit", "delete", "exam", "repeat",
+        "add", "todo", "list", "done", "undo", "view", "edit", "delete", "exam", "repeat", "stats",
         "settings", "notify", "role"
     )
 )]
@@ -991,6 +992,105 @@ pub async fn repeat_delete(
         "⏹️ 毎週の宿題 {} を止めました（登録済みの宿題は残ります）。",
         repeat_label(&r)
     ))
+    .await?;
+    Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// /hw stats（達成率）
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, poise::ChoiceParameter)]
+pub enum StatsPeriodChoice {
+    #[name = "今週"]
+    Week,
+    #[name = "今月"]
+    Month,
+    #[name = "全期間"]
+    All,
+}
+
+/// 自分の宿題の達成率を表示する
+#[poise::command(slash_command)]
+pub async fn stats(
+    ctx: Context<'_>,
+    #[description = "期間 (デフォルト: 今月)"] period: Option<StatsPeriodChoice>,
+    #[description = "チャンネルのみんなに見せる (デフォルト: 自分にだけ表示)"] public: Option<bool>,
+) -> Result<(), Error> {
+    let guild_id = require_guild!(ctx);
+    let period = match period.unwrap_or(StatsPeriodChoice::Month) {
+        StatsPeriodChoice::Week => StatsPeriod::Week,
+        StatsPeriodChoice::Month => StatsPeriod::Month,
+        StatsPeriodChoice::All => StatsPeriod::All,
+    };
+    let now = local_now();
+    let (due_from, due_until, label) = period.range(now);
+    let list = ctx
+        .data()
+        .db
+        .hw_list(
+            guild_id,
+            HwQuery {
+                kind: Some(HwKind::Homework),
+                due_from,
+                due_until,
+                ..Default::default()
+            },
+        )
+        .await?;
+    let me = ctx.author();
+    let s = stats::compute(&list, &me.id.to_string(), now);
+
+    let mut embed = CreateEmbed::new()
+        .title(format!("📊 {} さんの達成率", me.display_name()))
+        .description(format!("**{label}** の宿題"))
+        .colour(Colour(0x1ABC9C));
+    if s.overall.total == 0 {
+        embed = embed.field("全体", "この期間の宿題はありません", false);
+    } else {
+        embed = embed
+            .field("全体", format!("`{}`", s.overall.bar()), false)
+            .field(
+                "期限が過ぎた宿題",
+                match s.past.total {
+                    0 => "まだありません".to_string(),
+                    _ => format!(
+                        "{}件中 {}件 完了{}",
+                        s.past.total,
+                        s.past.done,
+                        match s.past.total - s.past.done {
+                            0 => " 🎉".to_string(),
+                            n => format!("（未完了 {n}件）"),
+                        }
+                    ),
+                },
+                true,
+            )
+            .field(
+                "これからの宿題",
+                match s.upcoming.total {
+                    0 => "ありません".to_string(),
+                    _ => format!("{}件中 {}件 完了", s.upcoming.total, s.upcoming.done),
+                },
+                true,
+            );
+        let subjects: Vec<String> = s
+            .by_subject
+            .iter()
+            .take(15)
+            .map(|sc| format!("`{}` {}", sc.count.bar(), truncate(&sc.subject, 20)))
+            .collect();
+        embed = embed.field("科目別", subjects.join("\n"), false);
+    }
+    embed = embed.footer(serenity::CreateEmbedFooter::new(
+        "宿題のみ（テストは含みません）。完了は /hw done やボタンで記録できます",
+    ));
+
+    ctx.send(
+        poise::CreateReply::default()
+            .embed(embed)
+            .ephemeral(!public.unwrap_or(false)),
+    )
     .await?;
     Ok(())
 }

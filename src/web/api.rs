@@ -16,6 +16,7 @@ use crate::{
         Homework, HwKind, HwQuery, HwSettings, NewHomework, Priority, Task, TaskQuery, TaskSort,
         TaskStatus,
     },
+    stats::{self as hw_stats, HwStats, StatsPeriod},
     time::{DUE_FORMAT, due_to_utc, local_now, parse_due_input, parse_time},
 };
 
@@ -28,6 +29,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me", get(me))
         .route("/guilds/{gid}/subjects", get(subjects))
+        .route("/guilds/{gid}/stats", get(stats))
         .route(
             "/guilds/{gid}/homework",
             get(list_homework).post(create_homework),
@@ -169,6 +171,49 @@ async fn subjects(
 ) -> ApiResult<Vec<String>> {
     auth.guild(&state, &gid)?;
     Ok(Json(state.db.hw_subjects(gid).await?))
+}
+
+#[derive(Deserialize)]
+struct StatsQuery {
+    /// week / month / all（省略時 month）
+    period: Option<String>,
+}
+
+#[derive(Serialize)]
+struct StatsDto {
+    label: String,
+    #[serde(flatten)]
+    stats: HwStats,
+}
+
+/// ログインしている人の宿題の達成率
+async fn stats(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(gid): Path<String>,
+    Query(q): Query<StatsQuery>,
+) -> ApiResult<StatsDto> {
+    auth.guild(&state, &gid)?;
+    let period = StatsPeriod::from_str(q.period.as_deref().unwrap_or("month"))
+        .ok_or_else(|| ApiError::bad_request("period は week / month / all のどれかです"))?;
+    let now = local_now();
+    let (due_from, due_until, label) = period.range(now);
+    let list = state
+        .db
+        .hw_list(
+            gid,
+            HwQuery {
+                kind: Some(HwKind::Homework),
+                due_from,
+                due_until,
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(Json(StatsDto {
+        label,
+        stats: hw_stats::compute(&list, &auth.user_id, now),
+    }))
 }
 
 // ────────────────────────────────────────────────────────────────────────────

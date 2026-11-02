@@ -102,6 +102,23 @@
   .btn.danger { background: none; color: var(--danger); margin-right: auto; }
   .error { color: var(--danger); font-size: 13px; min-height: 1em; }
 
+  .stats { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 8px; box-shadow: var(--shadow); }
+  .stats-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .stats-head .label { font-size: 13px; font-weight: 700; color: var(--muted); }
+  .stats .seg { padding: 2px; }
+  .stats .seg button { padding: 3px 10px; font-size: 13px; white-space: nowrap; }
+  .stats-main { display: flex; align-items: baseline; gap: 10px; margin: 8px 0 6px; }
+  .stats-main .pct { font-size: 34px; font-weight: 800; line-height: 1; }
+  .stats-main .sub { color: var(--muted); font-size: 13px; }
+  .meter { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+  .meter > span { display: block; height: 100%; border-radius: 999px; background: var(--ok); transition: width .3s; }
+  .meter.sm { height: 6px; }
+  .stats-row { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .stats details { margin-top: 8px; }
+  .stats summary { cursor: pointer; font-size: 13px; font-weight: 700; color: var(--accent); }
+  .subj { display: grid; grid-template-columns: minmax(0, 7em) 1fr auto; align-items: center; gap: 8px; font-size: 13px; margin-top: 6px; }
+  .subj .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .subj .num { color: var(--muted); font-variant-numeric: tabular-nums; }
   #toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: #222; color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100vw - 32px); }
   #toast.show { opacity: .95; }
 
@@ -194,6 +211,7 @@ const state = {
   past: false,
   cal: firstOfMonth(new Date()),
   calSelected: null,
+  statsPeriod: localStorage.getItem("statsPeriod") || "month",
   editing: null, // { type: "homework"|"exam"|"task", item }
 };
 
@@ -311,11 +329,45 @@ function pastToggle() {
 }
 
 // ── 各タブ ───────────────────────────────────────────────────────────
+function meter(count, small = false) {
+  const pct = count.total ? Math.round((count.done / count.total) * 100) : 0;
+  return el("div", { class: `meter ${small ? "sm" : ""}`, role: "progressbar", "aria-valuenow": pct, "aria-valuemin": 0, "aria-valuemax": 100 },
+    el("span", { style: `width:${pct}%` }));
+}
+
+function statsCard(st) {
+  const pct = (c) => (c.total ? Math.floor((c.done * 100) / c.total) : null);
+  const seg = el("div", { class: "seg" }, [["week", "今週"], ["month", "今月"], ["all", "全期間"]].map(([k, label]) =>
+    el("button", {
+      type: "button", class: state.statsPeriod === k ? "active" : "",
+      onclick: () => { state.statsPeriod = k; localStorage.setItem("statsPeriod", k); render(); },
+    }, label)));
+  const card = el("div", { class: "stats" }, el("div", { class: "stats-head" }, el("span", { class: "label" }, `📊 ${st.label} の達成率`), seg));
+  if (!st.overall.total) {
+    card.append(el("div", { class: "stats-row" }, "この期間の宿題はありません"));
+    return card;
+  }
+  card.append(
+    el("div", { class: "stats-main" }, el("span", { class: "pct" }, `${pct(st.overall)}%`), el("span", { class: "sub" }, `${st.overall.done} / ${st.overall.total} 件 完了`)),
+    meter(st.overall),
+    el("div", { class: "stats-row" },
+      el("span", {}, st.past.total ? `期限が過ぎた宿題 ${st.past.done}/${st.past.total}${st.past.done === st.past.total ? " 🎉" : ""}` : "期限が過ぎた宿題 なし"),
+      el("span", {}, `これから ${st.upcoming.done}/${st.upcoming.total}`)));
+  if (st.by_subject.length) {
+    card.append(el("details", {}, el("summary", {}, "科目別"),
+      ...st.by_subject.map((sc) => el("div", { class: "subj" },
+        el("span", { class: "name", title: sc.subject }, sc.subject), meter(sc, true), el("span", { class: "num" }, `${pct(sc)}% (${sc.done}/${sc.total})`)))));
+  }
+  return card;
+}
+
 async function viewTodo(v) {
-  const [list, exams] = await Promise.all([
+  const [list, exams, st] = await Promise.all([
     api(g("/homework?scope=todo")),
     api(g("/homework?scope=upcoming&kind=exam")),
+    api(g(`/stats?period=${state.statsPeriod}`)),
   ]);
+  v.append(statsCard(st));
   const now = Date.now() / 1000;
   const over = list.filter((h) => h.due_unix < now);
   const rest = list.filter((h) => h.due_unix >= now);

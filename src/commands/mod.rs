@@ -377,6 +377,11 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
             false,
         )
         .field(
+            "/hw stats",
+            "自分の宿題の達成率（今週・今月・全期間、科目別）を表示",
+            false,
+        )
+        .field(
             "/hw notify",
             "自分が未完了の宿題を期限前に DM で知らせてもらう",
             false,
