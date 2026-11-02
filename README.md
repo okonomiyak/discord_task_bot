@@ -17,6 +17,17 @@ Rust で書かれた Discord サーバー向けのタスク・宿題管理ボッ
   - サーバー: 期限前のチャンネル通知（初期値: 1日前）、毎日のまとめ投稿（初期値: 毎日 21:00）
   - 個人: 自分が未完了の宿題だけ DM でお知らせ（初期値: オフ）
 
+### Web ダッシュボード
+
+Discord でログインして、ブラウザ（スマホ・PC）から宿題・テスト・タスクを確認・完了・登録・編集できます。
+
+- 「やること」「宿題」「テスト」「タスク」「カレンダー」のタブ
+- ✅ ボタンで自分の分を完了に。追加・編集・削除もその場で
+- Web から登録したものは Discord のチャンネルにも投稿される（完了ボタン付き）
+- 見られるのは「自分が入っていて、ボットもいるサーバー」だけ。削除の権限は Discord と同じ
+
+セットアップは「[Web ダッシュボードを有効にする](#web-ダッシュボードを有効にする)」を参照。
+
 ### タスク（`/task`）
 
 - タスクの追加・編集・削除・ステータス管理
@@ -38,6 +49,7 @@ Rust で書かれた Discord サーバー向けのタスク・宿題管理ボッ
 | [serenity](https://github.com/serenity-rs/serenity) 0.12 | Discord API |
 | [rusqlite](https://github.com/rusqlite/rusqlite) 0.31 (bundled) | SQLite データベース |
 | [tokio](https://tokio.rs) 1 | 非同期ランタイム |
+| [axum](https://github.com/tokio-rs/axum) 0.8 / [reqwest](https://github.com/seanmonstar/reqwest) 0.12 | Web ダッシュボード・Discord OAuth2 |
 | [chrono](https://github.com/chronotope/chrono) 0.4 / [chrono-tz](https://github.com/chronotope/chrono-tz) 0.10 | 日時・タイムゾーン処理 |
 
 ## セットアップ
@@ -108,6 +120,36 @@ journalctl -u discord-task-bot -f   # ログ確認
 ```
 
 `.env` と `tasks.db` は `WorkingDirectory` から読み書きされます。
+
+### Web ダッシュボードを有効にする
+
+1. [Discord Developer Portal](https://discord.com/developers/applications) でボットのアプリを開き、**OAuth2** を開く
+   - **Client ID** と **Client Secret**（Reset Secret で発行）を控える
+   - **Redirects** に `https://<あなたのドメイン>/auth/callback` を追加して保存
+2. `.env` に追加:
+   ```env
+   DISCORD_CLIENT_ID=123456789012345678
+   DISCORD_CLIENT_SECRET=xxxxxxxx
+   WEB_BASE_URL=https://hw.example.com   # 外から見た URL（末尾の / は不要）
+   WEB_ADDR=0.0.0.0:8080                 # 省略可
+   ```
+3. ボットを再起動すると `Web ダッシュボード: https://hw.example.com` と表示される
+
+**外部に公開するときは HTTPS にしてください。** ログイン情報（Cookie）を守るためです。自宅 PC なら次のどちらかが簡単です:
+
+- **Cloudflare Tunnel**（ポート開放不要・HTTPS 自動）:
+  ```bash
+  cloudflared tunnel --url http://localhost:8080   # お試し用（URL は毎回変わる）
+  ```
+  独自ドメインで常用するなら `cloudflared tunnel create` → `cloudflared tunnel route dns` で固定 URL にする
+- **Caddy**（ポート 80/443 を PC に転送している場合、証明書を自動取得）:
+  ```
+  hw.example.com {
+      reverse_proxy localhost:8080
+  }
+  ```
+
+`WEB_BASE_URL` と Developer Portal の Redirects は**完全に一致**させてください（http/https、ドメイン、末尾 `/auth/callback`）。
 
 ### 二重起動の防止
 

@@ -4,6 +4,7 @@ mod hw_notify;
 mod models;
 mod reminder;
 mod time;
+mod web;
 
 use std::sync::Arc;
 
@@ -68,6 +69,7 @@ async fn main() {
         .init()
         .expect("データベーススキーマの初期化に失敗しました");
     let db_for_reminder = database.clone();
+    let db_for_web = database.clone();
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
@@ -159,6 +161,23 @@ async fn main() {
 
     // リマインダー・期限切れ通知のバックグラウンドタスク（60秒ごとにチェック）
     tokio::spawn(reminder::run(db_for_reminder, Arc::clone(&client.http)));
+
+    // Web ダッシュボード（DISCORD_CLIENT_ID などが設定されているときだけ）
+    match web::WebConfig::from_env() {
+        Some(Ok(config)) => {
+            let state = web::AppState::new(
+                db_for_web,
+                Arc::clone(&client.http),
+                Arc::clone(&client.cache),
+                config,
+            );
+            tokio::spawn(web::serve(state));
+        }
+        Some(Err(e)) => eprintln!("Web ダッシュボードを起動できません: {e}"),
+        None => println!(
+            "Web ダッシュボードは無効です（DISCORD_CLIENT_ID・DISCORD_CLIENT_SECRET が未設定）"
+        ),
+    }
 
     client.start().await.expect("ボットの起動に失敗しました");
 }

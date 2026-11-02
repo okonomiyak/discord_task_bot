@@ -380,6 +380,18 @@ impl Database {
         .await
     }
 
+    /// Discord への投稿先（設定のチャンネル、なければ最後に宿題・タスクを登録したチャンネル）
+    pub async fn announce_channel(&self, guild_id: String) -> Result<Option<String>, crate::Error> {
+        self.call(move |conn| {
+            let s = settings(conn, &guild_id)?;
+            Ok(match s.channel_id {
+                Some(c) => Some(c),
+                None => latest_channel(conn, &guild_id)?,
+            })
+        })
+        .await
+    }
+
     pub async fn hw_set_last_summary_date(
         &self,
         guild_id: String,
@@ -620,7 +632,8 @@ const SUMMARY_OFF: &str = "off";
 fn latest_channel(conn: &Connection, guild_id: &str) -> rusqlite::Result<Option<String>> {
     let from_homework: Option<String> = conn
         .query_row(
-            "SELECT channel_id FROM homework WHERE guild_id = ?1 ORDER BY id DESC LIMIT 1",
+            "SELECT channel_id FROM homework WHERE guild_id = ?1 AND channel_id != '0'
+             ORDER BY id DESC LIMIT 1",
             params![guild_id],
             |row| row.get(0),
         )
@@ -629,7 +642,7 @@ fn latest_channel(conn: &Connection, guild_id: &str) -> rusqlite::Result<Option<
         return Ok(from_homework);
     }
     conn.query_row(
-        "SELECT channel_id FROM tasks WHERE guild_id = ?1 AND channel_id IS NOT NULL
+        "SELECT channel_id FROM tasks WHERE guild_id = ?1 AND channel_id IS NOT NULL AND channel_id != '0'
              ORDER BY id DESC LIMIT 1",
         params![guild_id],
         |row| row.get(0),

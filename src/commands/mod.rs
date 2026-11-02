@@ -244,7 +244,7 @@ mod hw;
 mod task;
 
 pub use hw::{done_buttons, handle_component, hw};
-pub use task::task;
+pub use task::{delete_event, sync_event, task};
 
 // ────────────────────────────────────────────────────────────────────────────
 // /help

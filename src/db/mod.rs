@@ -2,8 +2,10 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use std::sync::{Arc, Mutex};
 
 mod homework;
+mod web;
 
 pub use homework::HwEdit;
+pub use web::WebSession;
 
 use crate::models::{PendingReminder, Priority, Task, TaskQuery, TaskSort, TaskStatus};
 use crate::time;
@@ -132,6 +134,7 @@ impl Database {
         }
 
         homework::init(&conn)?;
+        web::init(&conn)?;
 
         Ok(())
     }

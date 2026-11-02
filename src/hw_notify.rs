@@ -166,7 +166,8 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
 
     // 送信に失敗しても再送はしない（DM 拒否などで毎分エラーになり続けるのを防ぐ）
     for (channel, list) in channel_msgs {
-        let Ok(id) = channel.parse::<u64>() else {
+        // Web から登録した宿題は投稿先が決まっていないことがある（"0"）
+        let Some(id) = channel.parse::<u64>().ok().filter(|id| *id > 0) else {
             continue;
         };
         let msg = reminder_message(
@@ -179,7 +180,7 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
         }
     }
     for (user, list) in dm_msgs {
-        let Ok(id) = user.parse::<u64>() else {
+        let Some(id) = user.parse::<u64>().ok().filter(|id| *id > 0) else {
             continue;
         };
         let msg = reminder_message(
@@ -218,9 +219,9 @@ pub async fn check_summaries(db: &Database, http: &Arc<Http>) -> Result<(), Erro
     };
 
     for (s, channel) in db.hw_summary_targets().await? {
-        let (Some(time), Ok(channel)) = (
+        let (Some(time), Some(channel)) = (
             s.summary_time.as_deref().and_then(parse_time),
-            channel.parse::<u64>(),
+            channel.parse::<u64>().ok().filter(|id| *id > 0),
         ) else {
             continue;
         };
