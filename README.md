@@ -14,8 +14,19 @@ Rust で書かれた Discord サーバー向けのタスク・宿題管理ボッ
 - テスト・小テストの予定も登録でき、まとめ投稿や通知に載る
 - 毎週出る宿題は一度設定すれば、翌週の分が自動で登録される
 - 通知はすべて自由に設定できる
-  - サーバー: 期限前のチャンネル通知（初期値: 1日前）、毎日のまとめ投稿（初期値: オフ）
+  - サーバー: 期限前のチャンネル通知（初期値: 1日前）、毎日のまとめ投稿（初期値: 毎日 21:00）
   - 個人: 自分が未完了の宿題だけ DM でお知らせ（初期値: オフ）
+
+### Web ダッシュボード
+
+Discord でログインして、ブラウザ（スマホ・PC）から宿題・テスト・タスクを確認・完了・登録・編集できます。
+
+- 「やること」「宿題」「テスト」「タスク」「カレンダー」のタブ
+- ✅ ボタンで自分の分を完了に。追加・編集・削除もその場で
+- Web から登録したものは Discord のチャンネルにも投稿される（完了ボタン付き）
+- 見られるのは「自分が入っていて、ボットもいるサーバー」だけ。削除の権限は Discord と同じ
+
+セットアップは「[Web ダッシュボードを有効にする](#web-ダッシュボードを有効にする)」を参照。
 
 ### タスク（`/task`）
 
@@ -38,6 +49,7 @@ Rust で書かれた Discord サーバー向けのタスク・宿題管理ボッ
 | [serenity](https://github.com/serenity-rs/serenity) 0.12 | Discord API |
 | [rusqlite](https://github.com/rusqlite/rusqlite) 0.31 (bundled) | SQLite データベース |
 | [tokio](https://tokio.rs) 1 | 非同期ランタイム |
+| [axum](https://github.com/tokio-rs/axum) 0.8 / [reqwest](https://github.com/seanmonstar/reqwest) 0.12 | Web ダッシュボード・Discord OAuth2 |
 | [chrono](https://github.com/chronotope/chrono) 0.4 / [chrono-tz](https://github.com/chronotope/chrono-tz) 0.10 | 日時・タイムゾーン処理 |
 
 ## セットアップ
@@ -109,6 +121,47 @@ journalctl -u discord-task-bot -f   # ログ確認
 
 `.env` と `tasks.db` は `WorkingDirectory` から読み書きされます。
 
+### Web ダッシュボードを有効にする
+
+1. [Discord Developer Portal](https://discord.com/developers/applications) でボットのアプリを開き、**OAuth2** を開く
+   - **Client ID** と **Client Secret**（Reset Secret で発行）を控える
+   - **Redirects** に `https://<あなたのドメイン>/auth/callback` を追加して保存
+2. `.env` に追加:
+   ```env
+   DISCORD_CLIENT_ID=123456789012345678
+   DISCORD_CLIENT_SECRET=xxxxxxxx
+   WEB_BASE_URL=https://hw.example.com   # 外から見た URL（末尾の / は不要）
+   WEB_ADDR=0.0.0.0:8080                 # 省略可
+   ```
+3. ボットを再起動すると `Web ダッシュボード: https://hw.example.com` と表示される
+
+**外部に公開するときは HTTPS にしてください。** ログイン情報（Cookie）を守るためです。自宅 PC なら次のどちらかが簡単です:
+
+- **Cloudflare Tunnel**（ポート開放不要・HTTPS 自動）:
+  ```bash
+  cloudflared tunnel --url http://localhost:8080   # お試し用（URL は毎回変わる）
+  ```
+  独自ドメインで常用するなら `cloudflared tunnel create` → `cloudflared tunnel route dns` で固定 URL にする
+- **Caddy**（ポート 80/443 を PC に転送している場合、証明書を自動取得）:
+  ```
+  hw.example.com {
+      reverse_proxy localhost:8080
+  }
+  ```
+
+`WEB_BASE_URL` と Developer Portal の Redirects は**完全に一致**させてください（http/https、ドメイン、末尾 `/auth/callback`）。
+
+### 二重起動の防止
+
+同じデータベースを使うボットを2つ起動すると、1回のコマンドが2回実行されてしまいます（宿題が2件登録されるなど）。
+そのため、2つ目は「既に起動しています」と表示して終了します（`tasks.db.lock` でロック）。
+古いプロセスが残っている場合は止めてから起動してください:
+
+```bash
+ps aux | grep discord_task_bot
+kill <PID>
+```
+
 ### 開発
 
 ```bash
@@ -141,9 +194,9 @@ GitHub Actions で push / PR ごとに同じチェックが走ります。
 
 | 項目 | 初期値 | 説明 |
 |------|--------|------|
-| `channel` | 宿題を登録したチャンネル | 通知・まとめ投稿の送り先 |
+| `channel` | 未設定 | 通知・まとめ投稿の送り先。未設定なら、通知は宿題を登録したチャンネル、まとめ投稿は最後に宿題・タスクを登録したチャンネル |
 | `remind` | 1日前 | 期限前にチャンネルへ通知（オフ可）。通知時刻より後に登録された宿題には送らない |
-| `summary` | オフ | `21:00` のように指定すると毎日その時刻に「今日／明日／1週間以内」の宿題と2週間以内のテストをまとめて投稿（✅ ボタン付き）。`オフ` で停止 |
+| `summary` | 21:00 | 毎日この時刻に「今日／明日／1週間以内」の宿題、2週間以内のテスト、未完了のタスク（期限切れ・1週間以内）をまとめて投稿（✅ ボタン付き）。`7:30` のように変更、`オフ` で停止 |
 | `default_time` | 08:30 | 期限を `明日` のように日付だけで書いたときの時刻（`/task` も共通） |
 
 ✅ ボタンは押した人の分だけ完了になります（押した人にだけ結果が表示され、「取り消す」ボタンも出ます）。ボットを再起動した後や、DM のボタンでも使えます。

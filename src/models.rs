@@ -284,7 +284,7 @@ pub struct HwSettings {
     pub channel_id: Option<String>,
     /// チャンネルへの事前通知（期限の何秒前か、None でオフ）
     pub remind_before: Option<i64>,
-    /// 毎日のまとめ投稿の時刻 `HH:MM`（None でオフ）
+    /// 毎日のまとめ投稿の時刻 `HH:MM`（None でオフ、初期値は DEFAULT_SUMMARY_TIME）
     pub summary_time: Option<String>,
     /// 日付だけ指定されたときの期限の時刻 `HH:MM`
     pub default_time: String,
@@ -295,13 +295,14 @@ pub struct HwSettings {
 impl HwSettings {
     pub const DEFAULT_REMIND_BEFORE: i64 = 24 * 3600;
     pub const DEFAULT_TIME: &'static str = "08:30";
+    pub const DEFAULT_SUMMARY_TIME: &'static str = "21:00";
 
     pub fn default_for(guild_id: String) -> Self {
         Self {
             guild_id,
             channel_id: None,
             remind_before: Some(Self::DEFAULT_REMIND_BEFORE),
-            summary_time: None,
+            summary_time: Some(Self::DEFAULT_SUMMARY_TIME.to_string()),
             default_time: Self::DEFAULT_TIME.to_string(),
             last_summary_date: None,
         }

@@ -447,8 +447,10 @@ async fn register(
     let Some(due_date) = require_valid_due!(ctx, guild_id, Some(due)) else {
         return Ok(());
     };
+    // 3秒以内に応答しないと Discord 側で失敗表示になり、再実行で二重登録されやすいので先に応答しておく
+    ctx.defer().await?;
 
-    let id = db
+    let (id, created) = db
         .hw_add(NewHomework {
             kind,
             guild_id: guild_id.clone(),
@@ -465,6 +467,15 @@ async fn register(
     let Some(hw) = db.hw_get(id, guild_id).await? else {
         return reply_hw_not_found(ctx, id).await;
     };
+    if !created {
+        ctx.say(format!(
+            "#{} {} はさっき登録済みなので、新しくは登録しませんでした。",
+            hw.id,
+            hw.label()
+        ))
+        .await?;
+        return Ok(());
+    }
     let reply = match kind {
         HwKind::Homework => poise::CreateReply::default()
             .embed(
@@ -987,7 +998,7 @@ fn settings_embed(s: &HwSettings) -> CreateEmbed {
     let summary = match (&s.summary_time, &s.channel_id) {
         (None, _) => "オフ".to_string(),
         (Some(t), Some(_)) => format!("毎日 {t}"),
-        (Some(t), None) => format!("毎日 {t}（⚠️ 通知チャンネルが未設定のため投稿されません）"),
+        (Some(t), None) => format!("毎日 {t}（最後に宿題・タスクを登録したチャンネルへ）"),
     };
     CreateEmbed::new()
         .title("⚙️ 宿題の設定")
@@ -1014,7 +1025,9 @@ pub async fn settings(
     #[channel_types("Text")]
     channel: Option<serenity::GuildChannel>,
     #[description = "期限前にチャンネルへ通知するタイミング"] remind: Option<HwRemindChoice>,
-    #[description = "毎日のまとめ投稿の時刻（例: 21:00 / オフ）"] summary: Option<String>,
+    #[description = "毎日のまとめ投稿の時刻（初期値 21:00、例: 7:30 / オフ）"] summary: Option<
+        String,
+    >,
     #[description = "期限の時刻を省略したときの時刻（例: 08:30）"] default_time: Option<String>,
 ) -> Result<(), Error> {
     let guild_id = require_guild!(ctx);

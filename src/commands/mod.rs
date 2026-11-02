@@ -244,7 +244,7 @@ mod hw;
 mod task;
 
 pub use hw::{done_buttons, handle_component, hw};
-pub use task::task;
+pub use task::{delete_event, sync_event, task};
 
 // ────────────────────────────────────────────────────────────────────────────
 // /help
@@ -373,7 +373,7 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
         )
         .field(
             "/hw settings",
-            "サーバーの設定: 通知チャンネル / 期限前の通知 / 毎日のまとめ投稿 / 時刻省略時の時刻",
+            "サーバーの設定: 通知チャンネル / 期限前の通知 / 毎日のまとめ投稿（初期値 21:00、タスクも掲載）/ 時刻省略時の時刻",
             false,
         )
         .field(

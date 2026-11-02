@@ -10,3 +10,11 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 chrono = "0.4"
 dotenvy = "0.15"
 chrono-tz = "0.10"
+axum = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

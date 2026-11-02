@@ -1,5 +1,5 @@
 use poise::serenity_prelude::{
-    self as serenity, Colour, CreateEmbed, CreateScheduledEvent, EditScheduledEvent,
+    self as serenity, CacheHttp, Colour, CreateEmbed, CreateScheduledEvent, EditScheduledEvent,
     ScheduledEventId, ScheduledEventType, Timestamp,
 };
 
@@ -173,7 +173,8 @@ async fn create_event(
 }
 
 /// タスクの内容に合わせて Discord スケジュールイベントを更新する
-async fn sync_event(ctx: Context<'_>, task: &Task) {
+/// タスクの内容に合わせて Discord スケジュールイベントを更新する（Web からも使う）
+pub async fn sync_event(http: impl CacheHttp, task: &Task) {
     let Some(event_id) = task
         .discord_event_id
         .as_deref()
@@ -188,14 +189,24 @@ async fn sync_event(ctx: Context<'_>, task: &Task) {
         builder = builder.start_time(start).end_time(end);
     }
     if let Err(e) = guild(&task.guild_id)
-        .edit_scheduled_event(
-            ctx.serenity_context(),
-            ScheduledEventId::new(event_id),
-            builder,
-        )
+        .edit_scheduled_event(http, ScheduledEventId::new(event_id), builder)
         .await
     {
         eprintln!("イベント更新エラー: {:?}", e);
+    }
+}
+
+/// タスクに紐づく Discord スケジュールイベントを削除する（Web からも使う）
+pub async fn delete_event(http: impl AsRef<serenity::Http>, task: &Task) {
+    if let Some(eid) = task
+        .discord_event_id
+        .as_deref()
+        .and_then(|e| e.parse::<u64>().ok())
+        && let Err(e) = guild(&task.guild_id)
+            .delete_scheduled_event(http, ScheduledEventId::new(eid))
+            .await
+    {
+        eprintln!("イベント削除エラー: {:?}", e);
     }
 }
 
@@ -674,7 +685,7 @@ pub async fn edit(
     }
 
     if event_fields_changed {
-        sync_event(ctx, &task).await;
+        sync_event(ctx.serenity_context(), &task).await;
     }
     Ok(())
 }
@@ -693,13 +704,7 @@ pub async fn delete(ctx: Context<'_>, #[description = "タスクID"] id: i64) ->
     };
 
     // Discord イベントも削除
-    if let Some(eid) = task.discord_event_id.and_then(|e| e.parse::<u64>().ok())
-        && let Err(e) = guild(&guild_id)
-            .delete_scheduled_event(ctx.serenity_context(), ScheduledEventId::new(eid))
-            .await
-    {
-        eprintln!("イベント削除エラー: {:?}", e);
-    }
+    delete_event(ctx.serenity_context(), &task).await;
 
     ctx.say(format!(
         "🗑️ タスク #{}「{}」を削除しました。",
