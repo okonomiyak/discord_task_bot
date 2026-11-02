@@ -141,6 +141,11 @@ pub async fn serve(state: AppState) {
         "Web ダッシュボード: {} （{addr} で待ち受け）",
         state.config.base_url
     );
+    // Developer Portal の Redirects と1文字でも違うと「redirect_uri が無効です」になる
+    println!(
+        "Discord Developer Portal → OAuth2 → Redirects にこの URL を登録してください: {}",
+        state.config.redirect_uri()
+    );
     if let Err(e) = axum::serve(listener, router(state)).await {
         eprintln!("Web サーバーエラー: {e}");
     }
