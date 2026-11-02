@@ -98,6 +98,7 @@ pub(super) fn init(conn: &Connection) -> rusqlite::Result<()> {
         [],
     );
     let _ = conn.execute("ALTER TABLE homework ADD COLUMN repeat_id INTEGER", []);
+    let _ = conn.execute("ALTER TABLE hw_settings ADD COLUMN notify_role_id TEXT", []);
     Ok(())
 }
 
@@ -339,6 +340,9 @@ impl Database {
             }
             if let Some(default_time) = patch.default_time {
                 s.default_time = default_time;
+            }
+            if let Some(role) = patch.notify_role_id {
+                s.notify_role_id = role;
             }
             save_settings(&tx, &s)?;
             tx.commit()?;
@@ -650,8 +654,7 @@ fn latest_channel(conn: &Connection, guild_id: &str) -> rusqlite::Result<Option<
     .optional()
 }
 
-const SETTINGS_COLUMNS: &str =
-    "guild_id, channel_id, remind_before, summary_time, default_time, last_summary_date";
+const SETTINGS_COLUMNS: &str = "guild_id, channel_id, remind_before, summary_time, default_time, last_summary_date, notify_role_id";
 
 fn settings(conn: &Connection, guild_id: &str) -> rusqlite::Result<HwSettings> {
     Ok(conn
@@ -666,21 +669,23 @@ fn settings(conn: &Connection, guild_id: &str) -> rusqlite::Result<HwSettings> {
 
 fn save_settings(conn: &Connection, s: &HwSettings) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO hw_settings (guild_id, channel_id, remind_before, summary_time, default_time, last_summary_date)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO hw_settings (guild_id, channel_id, remind_before, summary_time, default_time, last_summary_date, notify_role_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
          ON CONFLICT (guild_id) DO UPDATE SET
             channel_id = excluded.channel_id,
             remind_before = excluded.remind_before,
             summary_time = excluded.summary_time,
             default_time = excluded.default_time,
-            last_summary_date = excluded.last_summary_date",
+            last_summary_date = excluded.last_summary_date,
+            notify_role_id = excluded.notify_role_id",
         params![
             s.guild_id,
             s.channel_id,
             s.remind_before.unwrap_or(0),
             s.summary_time.as_deref().unwrap_or(SUMMARY_OFF),
             s.default_time,
-            s.last_summary_date
+            s.last_summary_date,
+            s.notify_role_id
         ],
     )?;
     Ok(())
@@ -701,6 +706,7 @@ fn row_to_settings(row: &rusqlite::Row<'_>) -> rusqlite::Result<HwSettings> {
         summary_time,
         default_time: row.get(4)?,
         last_summary_date: row.get(5)?,
+        notify_role_id: row.get(6)?,
     })
 }
 
@@ -1033,11 +1039,13 @@ mod tests {
                     remind_before: Some(None),
                     summary_time: Some(Some("21:00".into())),
                     default_time: None,
+                    notify_role_id: Some(Some("777".into())),
                 },
             )
             .await
             .unwrap();
         assert_eq!(s.remind_before, None);
+        assert_eq!(s.role_mention().as_deref(), Some("<@&777>"));
         assert_eq!(db.hw_settings("G".into()).await.unwrap(), s);
         assert_eq!(
             db.hw_summary_targets().await.unwrap(),

@@ -86,6 +86,7 @@ Discord Developer Portal → OAuth2 → URL Generator で以下を有効化:
 - Send Messages
 - Embed Links
 - Manage Events（Discord イベント連携を使う場合）
+- Manage Roles（課題通知ロール `/hw role setup` を使う場合）
 
 ### 起動
 
@@ -189,6 +190,10 @@ GitHub Actions で push / PR ごとに同じチェックが走ります。
 | `/hw repeat list` / `/hw repeat delete id` | 毎週の宿題の一覧・停止（登録済みの宿題は残る） |
 | `/hw settings [channel] [remind] [summary] [default_time]` | サーバーの設定。何も指定しないと現在の設定を表示 |
 | `/hw notify [timing]` | 自分への DM 通知のタイミング（オフ / 1時間前〜1週間前） |
+| `/hw role setup [role]` | 課題通知ロールを作成（または既存ロールを指定）し、「🔔 通知を受け取る／🔕 受け取らない」ボタンを投稿。要「ロールの管理」権限 |
+| `/hw role remove` | 課題通知ロールのメンションをやめる（ロール自体は残る） |
+
+**課題通知ロール**を設定すると、宿題・テストの登録（Discord・Web とも）、期限前のチャンネル通知、毎日のまとめ投稿（載せるものがある日だけ）でそのロールをメンションします。メッセージで鳴らすのはこのロールだけで、宿題のタイトルなどに書かれた他のメンションでは通知されません。ボタンで付け外しするには、ボットのロールが通知ロールより上にある必要があります（`/hw role setup` で作ったロールは自動的にそうなります）。
 
 **`/hw settings` の項目**
 

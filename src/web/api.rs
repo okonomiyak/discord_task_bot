@@ -4,13 +4,14 @@ use axum::{
     http::StatusCode,
     routing::{get, patch, post},
 };
-use poise::serenity_prelude::{ChannelId, CreateAllowedMentions, CreateMessage};
+use poise::serenity_prelude::{ChannelId, CreateMessage};
 use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState, Auth, WebGuild};
 use crate::{
     commands::{delete_event, done_buttons, sync_event},
     db::{HwEdit, TaskEdit},
+    hw_notify::{role_allowed_mentions, with_role_mention},
     models::{
         Homework, HwKind, HwQuery, HwSettings, NewHomework, Priority, Task, TaskQuery, TaskSort,
         TaskStatus,
@@ -93,14 +94,20 @@ fn due_unix(due: &str) -> i64 {
 }
 
 /// Discord のチャンネルにも投稿する（メンションで通知は飛ばさない）
-async fn announce(state: &AppState, channel: Option<&str>, msg: CreateMessage) {
+/// settings を渡すと、その通知ロールだけを鳴らす（None なら誰も鳴らさない）
+async fn announce(
+    state: &AppState,
+    channel: Option<&str>,
+    msg: CreateMessage,
+    settings: Option<&HwSettings>,
+) {
     let Some(id) = channel
         .and_then(|c| c.parse::<u64>().ok())
         .filter(|id| *id > 0)
     else {
         return;
     };
-    let msg = msg.allowed_mentions(CreateAllowedMentions::new());
+    let msg = msg.allowed_mentions(role_allowed_mentions(settings));
     if let Err(e) = ChannelId::new(id).send_message(&state.http, msg).await {
         eprintln!("Web からの登録の投稿に失敗しました: {e:?}");
     }
@@ -321,9 +328,9 @@ async fn create_homework(
             u = due_unix(&hw.due_date),
         );
         let msg = CreateMessage::new()
-            .content(content)
+            .content(with_role_mention(Some(&settings), content))
             .components(done_buttons(std::slice::from_ref(&hw), false));
-        announce(&state, channel.as_deref(), msg).await;
+        announce(&state, channel.as_deref(), msg, Some(&settings)).await;
     }
 
     let status = if created {
@@ -575,7 +582,7 @@ async fn create_task(
         task.title,
         due
     ));
-    announce(&state, channel.as_deref(), msg).await;
+    announce(&state, channel.as_deref(), msg, None).await;
 
     Ok((StatusCode::CREATED, Json(task_dto(task))))
 }

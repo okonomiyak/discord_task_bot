@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use poise::serenity_prelude::{
-    ChannelId, Colour, CreateEmbed, CreateEmbedFooter, CreateMessage, Http, UserId,
+    ChannelId, Colour, CreateAllowedMentions, CreateEmbed, CreateEmbedFooter, CreateMessage, Http,
+    RoleId, UserId,
 };
 
 use crate::{
@@ -66,13 +67,38 @@ fn truncate_message(s: String) -> String {
     }
 }
 
-fn reminder_message(list: &[Homework], header: &str, footer: &str) -> CreateMessage {
+/// 通知ロールだけを鳴らす設定（本文中の他のメンションでは通知しない）
+pub fn role_allowed_mentions(settings: Option<&HwSettings>) -> CreateAllowedMentions {
+    let roles: Vec<RoleId> = settings
+        .and_then(|s| s.notify_role_id.as_deref())
+        .and_then(|r| r.parse::<u64>().ok())
+        .filter(|r| *r > 0)
+        .map(RoleId::new)
+        .into_iter()
+        .collect();
+    CreateAllowedMentions::new().roles(roles)
+}
+
+/// 本文の先頭に通知ロールのメンションを付ける
+pub fn with_role_mention(settings: Option<&HwSettings>, body: String) -> String {
+    match settings.and_then(HwSettings::role_mention) {
+        Some(mention) => format!("{mention} {body}"),
+        None => body,
+    }
+}
+
+/// 期限前の通知。settings を渡すとサーバーの通知ロールをメンションする（DM では None）
+fn reminder_message(
+    list: &[Homework],
+    header: &str,
+    footer: &str,
+    settings: Option<&HwSettings>,
+) -> CreateMessage {
     let lines: Vec<String> = list.iter().map(reminder_line).collect();
+    let body = format!("{header}\n{}\n{footer}", lines.join("\n"));
     CreateMessage::new()
-        .content(truncate_message(format!(
-            "{header}\n{}\n{footer}",
-            lines.join("\n")
-        )))
+        .content(truncate_message(with_role_mention(settings, body)))
+        .allowed_mentions(role_allowed_mentions(settings))
         .components(done_buttons(list, true))
 }
 
@@ -121,7 +147,7 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
     let mut settings: HashMap<String, HwSettings> = HashMap::new();
     let mut subscribers: HashMap<String, Vec<(String, i64)>> = HashMap::new();
     // 1回のチェックで同じ宛先への通知は1通にまとめる
-    let mut channel_msgs: BTreeMap<String, Vec<Homework>> = BTreeMap::new();
+    let mut channel_msgs: BTreeMap<(String, String), Vec<Homework>> = BTreeMap::new();
     let mut dm_msgs: BTreeMap<String, Vec<Homework>> = BTreeMap::new();
 
     for hw in &candidates {
@@ -144,7 +170,10 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
                 .channel_id
                 .clone()
                 .unwrap_or_else(|| hw.channel_id.clone());
-            channel_msgs.entry(channel).or_default().push(hw.clone());
+            channel_msgs
+                .entry((channel, hw.guild_id.clone()))
+                .or_default()
+                .push(hw.clone());
         }
 
         if !subscribers.contains_key(&hw.guild_id) {
@@ -165,7 +194,7 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
     }
 
     // 送信に失敗しても再送はしない（DM 拒否などで毎分エラーになり続けるのを防ぐ）
-    for (channel, list) in channel_msgs {
+    for ((channel, guild_id), list) in channel_msgs {
         // Web から登録した宿題は投稿先が決まっていないことがある（"0"）
         let Some(id) = channel.parse::<u64>().ok().filter(|id| *id > 0) else {
             continue;
@@ -174,6 +203,7 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
             &list,
             "📚 **宿題・テストが近づいています**",
             "宿題は終わったらボタンか `/hw done` で記録しよう！",
+            settings.get(&guild_id),
         );
         if let Err(e) = ChannelId::new(id).send_message(http, msg).await {
             eprintln!("宿題通知の送信エラー (channel {}): {:?}", channel, e);
@@ -187,6 +217,7 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
             &list,
             "📚 **まだ完了になっていない宿題・近づいているテストがあります**",
             "DM 通知の変更は `/hw notify` でできます。",
+            None,
         );
         if let Err(e) = UserId::new(id).direct_message(http, msg).await {
             eprintln!("宿題 DM の送信エラー (user {}): {:?}", user, e);
@@ -260,9 +291,16 @@ pub async fn check_summaries(db: &Database, http: &Arc<Http>) -> Result<(), Erro
             .await?;
 
         // ボタンは期限が近い宿題から（最大25個）
-        let msg = CreateMessage::new()
+        let mut msg = CreateMessage::new()
             .embed(summary_embed(&homework, &exams, &tasks, now))
-            .components(done_buttons(&homework, true));
+            .components(done_buttons(&homework, true))
+            .allowed_mentions(role_allowed_mentions(Some(&s)));
+        // 載せるものがある日だけ通知ロールを鳴らす
+        if !(homework.is_empty() && exams.is_empty() && tasks.is_empty())
+            && let Some(mention) = s.role_mention()
+        {
+            msg = msg.content(format!("{mention} 今日のまとめです"));
+        }
         if let Err(e) = ChannelId::new(channel).send_message(http, msg).await {
             eprintln!("まとめ投稿の送信エラー (guild {}): {:?}", s.guild_id, e);
         }
@@ -517,6 +555,41 @@ mod tests {
             json.get("fields")
                 .is_none_or(|f| f.as_array().is_some_and(|a| a.is_empty()))
         );
+    }
+
+    #[test]
+    fn reminder_pings_only_the_notify_role() {
+        let mut settings = HwSettings::default_for("G".into());
+        settings.notify_role_id = Some("777".into());
+        // タイトルに別のロールや @everyone が書かれていても鳴らさない
+        let mut item = hw(1, HwKind::Homework, "2999-01-01 08:30");
+        item.title = "<@&999> @everyone 課題".into();
+
+        let json = serde_json::to_value(reminder_message(
+            &[item.clone()],
+            "見出し",
+            "フッター",
+            Some(&settings),
+        ))
+        .unwrap();
+        assert!(
+            json["content"]
+                .as_str()
+                .unwrap()
+                .starts_with("<@&777> 見出し")
+        );
+        assert_eq!(
+            json["allowed_mentions"]["roles"],
+            serde_json::json!(["777"])
+        );
+        assert_eq!(json["allowed_mentions"]["parse"], serde_json::json!([]));
+
+        // ロール未設定・DM では誰も鳴らさない
+        let json =
+            serde_json::to_value(reminder_message(&[item], "見出し", "フッター", None)).unwrap();
+        assert!(json["content"].as_str().unwrap().starts_with("見出し"));
+        assert_eq!(json["allowed_mentions"]["roles"], serde_json::json!([]));
+        assert_eq!(json["allowed_mentions"]["parse"], serde_json::json!([]));
     }
 
     #[test]

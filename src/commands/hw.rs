@@ -1,13 +1,14 @@
 use poise::serenity_prelude::{
     self as serenity, AutocompleteChoice, ButtonStyle, Colour, ComponentInteraction,
-    CreateActionRow, CreateButton, CreateEmbed, CreateInteractionResponse,
-    CreateInteractionResponseMessage,
+    CreateActionRow, CreateAllowedMentions, CreateButton, CreateEmbed, CreateInteractionResponse,
+    CreateInteractionResponseMessage, EditRole, RoleId,
 };
 
 use super::{build_pages, due_help, parse_due_with, reply_ephemeral, send_paginated, truncate};
 use crate::{
     Context, Data, Error,
     db::HwEdit,
+    hw_notify::{role_allowed_mentions, with_role_mention},
     models::{
         Homework, HwKind, HwQuery, HwRepeat, HwSettings, HwSettingsPatch, NewHomework, WEEKDAYS_JA,
     },
@@ -218,6 +219,9 @@ pub async fn handle_component(
     data: &Data,
     interaction: &ComponentInteraction,
 ) -> Result<(), Error> {
+    if let Some(action) = interaction.data.custom_id.strip_prefix(ROLE_PREFIX) {
+        return handle_role_button(ctx, data, interaction, action).await;
+    }
     let mut parts = interaction.data.custom_id.split(':');
     let (Some(prefix), Some(guild_id), Some(id)) = (parts.next(), parts.next(), parts.next())
     else {
@@ -404,7 +408,7 @@ fn repeat_label(r: &HwRepeat) -> String {
     slash_command,
     subcommands(
         "add", "todo", "list", "done", "undo", "view", "edit", "delete", "exam", "repeat",
-        "settings", "notify"
+        "settings", "notify", "role"
     )
 )]
 pub async fn hw(_ctx: Context<'_>) -> Result<(), Error> {
@@ -476,8 +480,18 @@ async fn register(
         .await?;
         return Ok(());
     }
+    // 通知ロールが設定されていればメンションする（他のメンションは鳴らさない）
+    let settings = db.hw_settings(hw.guild_id.clone()).await?;
+    let mut base =
+        poise::CreateReply::default().allowed_mentions(role_allowed_mentions(Some(&settings)));
+    if settings.notify_role_id.is_some() {
+        base = base.content(with_role_mention(
+            Some(&settings),
+            format!("新しい{}が登録されました", hw.kind.display()),
+        ));
+    }
     let reply = match kind {
-        HwKind::Homework => poise::CreateReply::default()
+        HwKind::Homework => base
             .embed(
                 hw_embed(&hw, "📚 宿題を登録しました", Colour(0x2ECC71)).footer(
                     serenity::CreateEmbedFooter::new(
@@ -486,11 +500,7 @@ async fn register(
                 ),
             )
             .components(done_buttons(std::slice::from_ref(&hw), false)),
-        HwKind::Exam => poise::CreateReply::default().embed(hw_embed(
-            &hw,
-            "📝 テストを登録しました",
-            Colour(0xE74C3C),
-        )),
+        HwKind::Exam => base.embed(hw_embed(&hw, "📝 テストを登録しました", Colour(0xE74C3C))),
     };
     ctx.send(reply).await?;
     Ok(())
@@ -986,6 +996,223 @@ pub async fn repeat_delete(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// /hw role（課題通知ロール）
+// ────────────────────────────────────────────────────────────────────────────
+
+const ROLE_PREFIX: &str = "hwrole:";
+const DEFAULT_ROLE_NAME: &str = "課題通知";
+
+/// 「受け取る／やめる」ボタン付きの案内
+fn role_panel(role_id: &str) -> poise::CreateReply {
+    let embed = CreateEmbed::new()
+        .title("🔔 課題通知ロール")
+        .colour(Colour(0x5865F2))
+        .description(format!(
+            "<@&{role_id}> を付けると、宿題・テストの登録、期限前の通知、毎日のまとめで\
+             メンションが届きます。\n下のボタンでいつでも付け外しできます。"
+        ));
+    let buttons = CreateActionRow::Buttons(vec![
+        CreateButton::new(format!("{ROLE_PREFIX}on"))
+            .style(ButtonStyle::Primary)
+            .emoji('🔔')
+            .label("通知を受け取る"),
+        CreateButton::new(format!("{ROLE_PREFIX}off"))
+            .style(ButtonStyle::Secondary)
+            .emoji('🔕')
+            .label("受け取らない"),
+    ]);
+    poise::CreateReply::default()
+        .embed(embed)
+        .components(vec![buttons])
+        // 案内でロールの人を鳴らさない
+        .allowed_mentions(CreateAllowedMentions::new())
+}
+
+/// 課題通知ロール（作成・付け外しボタンの設置・解除）
+#[poise::command(slash_command, subcommands("role_setup", "role_remove"))]
+pub async fn role(_ctx: Context<'_>) -> Result<(), Error> {
+    Ok(())
+}
+
+/// 通知ロールを作成（または既存のロールを指定）して、付け外しボタンを投稿する
+#[poise::command(
+    slash_command,
+    rename = "setup",
+    required_permissions = "MANAGE_ROLES",
+    required_bot_permissions = "MANAGE_ROLES"
+)]
+pub async fn role_setup(
+    ctx: Context<'_>,
+    #[description = "使うロール（省略すると「課題通知」ロールを作成）"] role: Option<
+        serenity::Role,
+    >,
+) -> Result<(), Error> {
+    let guild_id = require_guild!(ctx);
+    let Some(gid) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let db = &ctx.data().db;
+
+    let (role_id, mentionable, created) = match role {
+        Some(role) => {
+            if role.id.get() == gid.get() || role.managed {
+                return reply_ephemeral(
+                    ctx,
+                    "@everyone やボット・連携サービスのロールは使えません。別のロールを指定してください。",
+                )
+                .await;
+            }
+            (role.id, role.mentionable, false)
+        }
+        None => {
+            // 設定済みのロールがまだあれば使い回す
+            let current = db.hw_settings(guild_id.clone()).await?.notify_role_id;
+            let roles = gid.roles(ctx.http()).await?;
+            match current
+                .and_then(|r| r.parse::<u64>().ok())
+                .and_then(|r| roles.get(&RoleId::new(r)))
+            {
+                Some(existing) => (existing.id, existing.mentionable, false),
+                None => {
+                    let new_role = gid
+                        .create_role(
+                            ctx.http(),
+                            EditRole::new()
+                                .name(DEFAULT_ROLE_NAME)
+                                .mentionable(true)
+                                .colour(0x5865F2)
+                                .audit_log_reason("宿題ボットの課題通知ロール"),
+                        )
+                        .await?;
+                    (new_role.id, true, true)
+                }
+            }
+        }
+    };
+
+    db.hw_update_settings(
+        guild_id,
+        HwSettingsPatch {
+            notify_role_id: Some(Some(role_id.to_string())),
+            ..Default::default()
+        },
+    )
+    .await?;
+
+    let mut note = if created {
+        format!("✅ <@&{role_id}> ロールを作成して、課題の通知でメンションするようにしました。")
+    } else {
+        format!("✅ 課題の通知で <@&{role_id}> をメンションするようにしました。")
+    };
+    if !mentionable {
+        note += "\n⚠️ このロールは「誰でも@mentionを許可」がオフです。オンにするか、ボットに「@everyone、@here、全てのロールにメンション」権限を付けないと通知が届きません。";
+    }
+    ctx.send(role_panel(&role_id.to_string()).content(note))
+        .await?;
+    Ok(())
+}
+
+/// 通知ロールのメンションをやめる（ロール自体は削除しません）
+#[poise::command(
+    slash_command,
+    rename = "remove",
+    required_permissions = "MANAGE_ROLES"
+)]
+pub async fn role_remove(ctx: Context<'_>) -> Result<(), Error> {
+    let guild_id = require_guild!(ctx);
+    ctx.data()
+        .db
+        .hw_update_settings(
+            guild_id,
+            HwSettingsPatch {
+                notify_role_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await?;
+    ctx.say("🔕 課題の通知でロールをメンションしないようにしました（ロールは残っているので、不要ならサーバー設定から削除してください）。")
+        .await?;
+    Ok(())
+}
+
+/// 「通知を受け取る／受け取らない」ボタン
+async fn handle_role_button(
+    ctx: &serenity::Context,
+    data: &Data,
+    interaction: &ComponentInteraction,
+    action: &str,
+) -> Result<(), Error> {
+    let want = match action {
+        "on" => true,
+        "off" => false,
+        _ => return Ok(()),
+    };
+    let respond = |content: String| {
+        CreateInteractionResponse::Message(
+            CreateInteractionResponseMessage::new()
+                .ephemeral(true)
+                .content(content),
+        )
+    };
+    let (Some(guild_id), Some(member)) = (interaction.guild_id, interaction.member.as_ref()) else {
+        return Ok(());
+    };
+    let role = data
+        .db
+        .hw_settings(guild_id.to_string())
+        .await?
+        .notify_role_id
+        .and_then(|r| r.parse::<u64>().ok())
+        .map(RoleId::new);
+    let Some(role) = role else {
+        interaction
+            .create_response(
+                ctx,
+                respond(
+                    "通知ロールが設定されていません。管理者に `/hw role setup` を頼んでください。"
+                        .into(),
+                ),
+            )
+            .await?;
+        return Ok(());
+    };
+
+    let has = member.roles.contains(&role);
+    let content = if has == want {
+        if want {
+            format!("もう <@&{role}> が付いています。")
+        } else {
+            format!("<@&{role}> は付いていません。")
+        }
+    } else {
+        let result = if want {
+            ctx.http
+                .add_member_role(guild_id, member.user.id, role, Some("課題通知を受け取る"))
+                .await
+        } else {
+            ctx.http
+                .remove_member_role(
+                    guild_id,
+                    member.user.id,
+                    role,
+                    Some("課題通知を受け取らない"),
+                )
+                .await
+        };
+        match result {
+            Ok(()) if want => format!("🔔 <@&{role}> を付けました。課題の通知が届きます。"),
+            Ok(()) => format!("🔕 <@&{role}> を外しました。"),
+            Err(e) => {
+                eprintln!("通知ロールの付け外しに失敗しました: {e:?}");
+                "ロールを変更できませんでした。ボットに「ロールの管理」権限があり、ボットのロールが通知ロールより上にあるか確認してください。".into()
+            }
+        }
+    };
+    interaction.create_response(ctx, respond(content)).await?;
+    Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // /hw settings
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -1006,6 +1233,14 @@ fn settings_embed(s: &HwSettings) -> CreateEmbed {
         .field("通知チャンネル", channel, false)
         .field("期限前の通知", format_remind(s.remind_before), true)
         .field("まとめ投稿", summary, true)
+        .field(
+            "通知ロール",
+            s.notify_role_id
+                .as_ref()
+                .map(|r| format!("<@&{r}>"))
+                .unwrap_or_else(|| "なし（/hw role setup で設定）".to_string()),
+            true,
+        )
         .field(
             "時刻を省略したときの期限（/task も共通）",
             &s.default_time,
@@ -1070,6 +1305,7 @@ pub async fn settings(
         remind_before: remind.map(|r| r.to_seconds()),
         summary_time,
         default_time,
+        notify_role_id: None,
     };
 
     let changed = patch.channel_id.is_some()

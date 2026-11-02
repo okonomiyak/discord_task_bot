@@ -382,6 +382,12 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
             false,
         )
         .field(
+            "/hw role setup ・ /hw role remove",
+            "課題通知ロールを作成して、付け外しボタンを投稿（要: ロールの管理）\n\
+             登録・期限前の通知・まとめ投稿でこのロールをメンションします",
+            false,
+        )
+        .field(
             "期限の書き方",
             "`明日` `明後日 17:00` `明日17時` `金曜` `12/5` `12/5 13:00` `2025-12-05`",
             false,

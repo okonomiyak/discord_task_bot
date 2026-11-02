@@ -290,6 +290,8 @@ pub struct HwSettings {
     pub default_time: String,
     /// 最後にまとめ投稿した日 `YYYY-MM-DD`
     pub last_summary_date: Option<String>,
+    /// 課題の通知でメンションするロール
+    pub notify_role_id: Option<String>,
 }
 
 impl HwSettings {
@@ -305,7 +307,13 @@ impl HwSettings {
             summary_time: Some(Self::DEFAULT_SUMMARY_TIME.to_string()),
             default_time: Self::DEFAULT_TIME.to_string(),
             last_summary_date: None,
+            notify_role_id: None,
         }
+    }
+
+    /// 通知ロールのメンション（メッセージ本文の先頭に付ける）
+    pub fn role_mention(&self) -> Option<String> {
+        self.notify_role_id.as_ref().map(|r| format!("<@&{r}>"))
     }
 }
 
@@ -316,4 +324,6 @@ pub struct HwSettingsPatch {
     pub remind_before: Option<Option<i64>>,
     pub summary_time: Option<Option<String>>,
     pub default_time: Option<String>,
+    /// Some(None) で通知ロールを解除
+    pub notify_role_id: Option<Option<String>>,
 }
