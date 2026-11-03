@@ -87,6 +87,22 @@
   .person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; }
   .panel h2 { margin: 0; font-size: 16px; }
+  .help p { margin: 0; }
+  /* 目次から飛んだとき、見出しが上に固定したヘッダーの下に隠れないように */
+  .help { scroll-margin-top: 110px; }
+  /* 狭い画面ではロゴの文字を消して、サーバー名が読めるようにする */
+  @media (max-width: 480px) { .brand { display: none; } }
+  .help dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; font-size: 14px; }
+  .help dt { font-weight: 700; }
+  .help dd { margin: 0; color: var(--muted); }
+  .help ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+  .help table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .help th, .help td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  .help th { background: var(--surface-2); font-weight: 700; }
+  .help code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: var(--surface-2); padding: 0 4px; }
+  .help .toc { display: flex; flex-wrap: wrap; gap: 6px; }
+  .help .toc a { font-size: 13px; padding: 3px 8px; border: 1px solid var(--border); text-decoration: none; color: var(--text); background: var(--surface); }
+  @media (max-width: 420px) { .help dl { grid-template-columns: 1fr; gap: 2px; } .help dd { margin-bottom: 6px; } }
   .panel .hint { font-size: 12px; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   @media (max-width: 420px) { .row2 { grid-template-columns: 1fr; } }
@@ -179,8 +195,9 @@
       <select id="guild" aria-label="サーバー"></select>
       <img class="avatar" id="avatar" alt="">
       <button class="icon-btn" id="open-search" title="検索" aria-label="検索"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg></button>
+      <button class="icon-btn" id="open-help" title="使い方" aria-label="使い方"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5v.5"/></svg></button>
       <button class="icon-btn" id="open-settings" title="設定" aria-label="設定"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/><rect x="7" y="4" width="4" height="4" fill="var(--surface)"/><rect x="14" y="10" width="4" height="4" fill="var(--surface)"/><rect x="5" y="16" width="4" height="4" fill="var(--surface)"/></svg></button>
-      <button class="icon-btn" id="logout" title="ログアウト">ログアウト</button>
+      <button class="icon-btn" id="logout" title="ログアウト" aria-label="ログアウト"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 4H4v16h10"/><path d="M10 12h11M17 8l4 4-4 4"/></svg></button>
     </div>
     <nav id="tabs">
       <button data-tab="todo">やること</button>
@@ -564,6 +581,105 @@ async function viewCalendar(v) {
   v.append(...items.map(({ type, item }) => (type === "task" ? taskCard(item) : hwCard(item))));
 }
 
+// ── 使い方 ───────────────────────────────────────────────────────────
+function helpSection(id, title, ...children) {
+  return el("section", { class: "panel help", id }, el("h2", {}, title), ...children);
+}
+function defs(rows) {
+  return el("dl", {}, ...rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
+}
+function table(head, rows) {
+  return el("table", {}, el("thead", {}, el("tr", {}, ...head.map((h) => el("th", {}, h)))),
+    el("tbody", {}, ...rows.map((r) => el("tr", {}, ...r.map((c, i) => el("td", {}, i === 0 ? el("code", {}, c) : c))))));
+}
+function bullets(items) {
+  return el("ul", {}, ...items.map((t) => el("li", {}, t)));
+}
+
+function viewHelp(v) {
+  const sections = [
+    ["help-tabs", "画面の見方"],
+    ["help-homework", "宿題の操作"],
+    ["help-due", "期限の書き方"],
+    ["help-notify", "通知と設定"],
+    ["help-faq", "よくある質問"],
+    ["help-discord", "Discord のコマンド"],
+  ];
+  v.append(
+    el("section", { class: "panel help" },
+      el("h2", {}, "使い方"),
+      el("p", { class: "hint" }, "Discord の宿題・テスト・タスクを、このサイトから確認・完了・登録・編集できます。内容は Discord と同じデータです。"),
+      el("nav", { class: "toc", "aria-label": "目次" }, ...sections.map(([id, title]) =>
+        el("a", { href: `#${id}`, onclick: (e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth" }); } }, title)))),
+
+    helpSection("help-tabs", "画面の見方", defs([
+      ["やること", "自分がまだ終わっていない宿題（期限切れは1週間前まで）と、2週間以内のテスト。上に自分の達成率"],
+      ["宿題", "みんなの宿題の一覧。「期限が過ぎたものも表示」で過去の分も見られる"],
+      ["テスト", "テスト・小テストの予定"],
+      ["タスク", "タスク（/task）の一覧。ステータスはその場で変えられる"],
+      ["カレンダー", "期限を月ごとに表示。日付を押すとその日の予定。枠線だけの項目はテスト"],
+      ["検索", "右上の虫めがね。科目・内容・メモ・タスク名で、過去の分も含めて探せる"],
+      ["設定", "右上のスライダー。サーバーの通知設定・自分への DM 通知・毎週の宿題"],
+      ["＋ボタン", "右下。宿題・テスト・タスクを追加。Discord のチャンネルにも投稿される"],
+    ])),
+
+    helpSection("help-homework", "宿題の操作", defs([
+      ["完了にする", "左の四角を押す。自分の分だけが完了になり、もう一度押すと戻せる"],
+      ["完了 ○人", "押すと、終わった人の名前が出る"],
+      ["クラス ○%", "宿題の完了を記録したことがある人のうち、終わった人の割合"],
+      ["編集", "右の鉛筆。科目・内容・期限・メモを変えられる"],
+      ["削除", "編集画面の「削除」。宿題を消せるのは登録した人か、メッセージの管理権限がある人だけ"],
+      ["毎週", "毎週の宿題から自動で登録されたもの。期限が過ぎると翌週の分が登録される"],
+      ["メモのリンク", "メモに書いた https:// で始まる URL は押すと開ける"],
+    ])),
+
+    helpSection("help-due", "期限の書き方",
+      el("p", { class: "hint" }, "時刻を省略すると、設定画面の「時刻を省略したときの期限」（最初は 08:30）になります。日時の入力欄から選ぶこともできます。"),
+      table(["書き方", "意味"], [
+        ["今日 / 明日 / 明後日", "その日"],
+        ["明日 17:00 / 明日17時半", "時刻つき（「17時」「17時30分」も可）"],
+        ["金 / 金曜 / 金曜日", "次のその曜日（今日と同じ曜日なら来週）"],
+        ["12/5 / 12/5 13:00", "年は省略できる（過ぎた日付なら来年）"],
+        ["2025-12-05 / 2025/12/05 9:00", "年から書く"],
+      ])),
+
+    helpSection("help-notify", "通知と設定", defs([
+      ["期限前の通知", "期限の1日前（設定で変更・オフ可）に、通知チャンネルへまとめて投稿"],
+      ["毎日のまとめ", "毎日 21:00（設定で変更・オフ可）に、今日・明日・1週間以内の宿題、2週間以内のテスト、未完了のタスク（期限切れ・1週間以内）を投稿"],
+      ["自分への DM", "設定画面の「自分への DM 通知」で、未完了の宿題とテストを期限前に DM で受け取れる"],
+      ["通知ロール", "Discord の /hw role setup で作るロール。付けた人に、登録・期限前・まとめの通知でメンションが届く"],
+      ["通知チャンネル", "未設定なら、宿題を登録したチャンネル（まとめは最後に登録したチャンネル）に投稿"],
+    ])),
+
+    helpSection("help-faq", "よくある質問", defs([
+      ["達成率の対象は？", "宿題だけ（テストは含まない）。期間は今週・今月・全期間から選べる"],
+      ["クラス平均の分母は？", "このサーバーで宿題の完了を一度でも記録したことがある人。始めたばかりは人数が少なく、数字が大きく動く"],
+      ["見られるサーバーは？", "自分が入っていて、ボットもいるサーバー。右上で切り替えられる"],
+      ["パスワードは保存される？", "されない。ログインは Discord の画面で行い、このサイトは名前・アイコン・入っているサーバーだけを受け取る"],
+      ["表示がおかしいときは", "ページを再読み込み。直らなければログアウトしてもう一度ログイン"],
+    ])),
+
+    helpSection("help-discord", "Discord のコマンド",
+      el("p", { class: "hint" }, "同じことを Discord からもできます。宿題は /hw、タスクは /task から始まります。"),
+      table(["コマンド", "内容"], [
+        ["/hw add", "宿題を登録"],
+        ["/hw todo", "自分がまだ終わっていない宿題（自分にだけ表示）"],
+        ["/hw list", "宿題の一覧（past:true で期限が過ぎたもの）"],
+        ["/hw done ・ /hw undo", "自分の分を完了にする・取り消す"],
+        ["/hw view ・ edit ・ delete", "詳細・編集・削除"],
+        ["/hw exam add ・ list", "テストの登録・一覧"],
+        ["/hw repeat add ・ list ・ delete", "毎週の宿題"],
+        ["/hw stats", "自分の達成率（public:true でみんなに見せる）"],
+        ["/hw settings", "サーバーの通知設定"],
+        ["/hw notify", "自分への DM 通知"],
+        ["/hw role setup ・ remove", "課題通知ロール（ロールの管理権限が必要）"],
+        ["/task add ・ list ・ search ・ view", "タスクの登録・一覧・検索・詳細"],
+        ["/task status ・ assign ・ edit ・ delete", "ステータス変更・担当者・編集・削除"],
+        ["/help", "コマンド一覧を Discord に表示"],
+      ])),
+  );
+}
+
 // ── 検索 ─────────────────────────────────────────────────────────────
 async function showSearchResults(box, q) {
   if (!q.trim()) { box.replaceChildren(empty("科目・内容・メモ・タスク名で探せます（期限が過ぎたものも含みます）")); return; }
@@ -707,8 +823,10 @@ async function viewSettings(v) {
 async function render() {
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === state.tab));
   $("#open-settings").classList.toggle("active", state.tab === "settings");
+  $("#open-help").classList.toggle("active", state.tab === "help");
   $("#open-search").classList.toggle("active", state.tab === "search");
-  $("#add").hidden = !state.guild || state.tab === "settings" || state.tab === "search";
+  $("#add").hidden = !state.guild || ["settings", "search", "help"].includes(state.tab);
+  if (state.tab === "help") { const hv = el("div"); viewHelp(hv); $("#view").replaceChildren(hv); return; }
   const v = $("#view");
   if (!state.guild) { v.replaceChildren(empty("ボットが入っているサーバーがありません。ボットがいるサーバーに参加してから、もう一度ログインしてください。")); return; }
   const next = el("div");
@@ -796,6 +914,9 @@ $("#delete").addEventListener("click", async () => {
 $("#cancel").addEventListener("click", () => $("#editor").close());
 $("#kind-seg").addEventListener("click", (e) => { if (e.target.dataset.kind) setKind(e.target.dataset.kind); });
 $("#picker").addEventListener("change", (e) => { if (e.target.value) $("#form [name=due]").value = e.target.value.replace("T", " "); });
+$("#open-help").addEventListener("click", () => {
+  state.tab = state.tab === "help" ? "todo" : "help"; localStorage.setItem("tab", state.tab); render(); window.scrollTo(0, 0);
+});
 $("#open-search").addEventListener("click", () => {
   state.tab = state.tab === "search" ? "todo" : "search"; localStorage.setItem("tab", state.tab); render();
 });
