@@ -1401,7 +1401,7 @@ pub async fn settings(
     };
 
     let mut patch = HwSettingsPatch {
-        channel_id: channel.map(|c| c.id.to_string()),
+        channel_id: channel.map(|c| Some(c.id.to_string())),
         remind_before: remind.map(|r| r.to_seconds()),
         summary_time,
         default_time,
@@ -1423,7 +1423,7 @@ pub async fn settings(
     if matches!(patch.summary_time, Some(Some(_))) && patch.channel_id.is_none() {
         let current = db.hw_settings(guild_id.clone()).await?;
         if current.channel_id.is_none() {
-            patch.channel_id = Some(ctx.channel_id().to_string());
+            patch.channel_id = Some(Some(ctx.channel_id().to_string()));
         }
     }
 

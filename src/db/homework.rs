@@ -330,7 +330,7 @@ impl Database {
             let tx = conn.transaction()?;
             let mut s = settings(&tx, &guild_id)?;
             if let Some(channel_id) = patch.channel_id {
-                s.channel_id = Some(channel_id);
+                s.channel_id = channel_id;
             }
             if let Some(remind_before) = patch.remind_before {
                 s.remind_before = remind_before;
@@ -1035,7 +1035,7 @@ mod tests {
             .hw_update_settings(
                 "G".into(),
                 HwSettingsPatch {
-                    channel_id: Some("99".into()),
+                    channel_id: Some(Some("99".into())),
                     remind_before: Some(None),
                     summary_time: Some(Some("21:00".into())),
                     default_time: None,
