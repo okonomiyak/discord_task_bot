@@ -4,12 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>宿題ボード</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%235865f2'/><path d='M8 16l6 6 10-12' fill='none' stroke='white' stroke-width='4'/></svg>">
 <style>
   :root {
     --bg: #f4f5f7; --surface: #ffffff; --surface-2: #eef0f3; --text: #1d2129; --muted: #6b7280;
     --border: #dfe2e7; --accent: #5865f2; --accent-text: #ffffff; --ok: #1f9d55; --warn: #c27c0e;
-    --danger: #d23f3f; --exam: #c2410c; --radius: 12px; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.04);
+    --danger: #d23f3f; --exam: #c2410c; --radius: 0; --shadow: 0 1px 2px rgba(0,0,0,.06), 0 2px 8px rgba(0,0,0,.04);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -27,10 +27,11 @@
 
   header { position: sticky; top: 0; z-index: 10; background: var(--surface); border-bottom: 1px solid var(--border); }
   .bar { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 8px; padding: 10px 16px; }
-  .brand { font-weight: 700; white-space: nowrap; }
-  .bar select { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); }
+  .brand { font-weight: 800; white-space: nowrap; font-size: 15px; }
+  .bar select { flex: 1; min-width: 0; padding: 6px 8px; border: 1px solid var(--border); border-radius: 0; background: var(--surface-2); }
   .avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--surface-2); flex: none; object-fit: cover; }
-  .icon-btn { border: 0; background: none; padding: 6px; border-radius: 8px; cursor: pointer; color: var(--muted); }
+  .icon-btn svg { display: block; }
+  .icon-btn { border: 0; background: none; padding: 6px; border-radius: 0; cursor: pointer; color: var(--muted); }
   .icon-btn:hover { background: var(--surface-2); color: var(--text); }
 
   nav { max-width: 760px; margin: 0 auto; display: flex; gap: 4px; padding: 0 12px; overflow-x: auto; scrollbar-width: none; }
@@ -42,16 +43,15 @@
   .toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; user-select: none; }
   .section-title { font-size: 13px; font-weight: 700; color: var(--muted); margin: 18px 4px 8px; }
   .empty { text-align: center; color: var(--muted); padding: 40px 16px; }
-  .empty .big { font-size: 40px; }
 
-  .card { display: flex; gap: 12px; align-items: flex-start; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin-bottom: 8px; box-shadow: var(--shadow); }
+  .card { display: flex; gap: 12px; align-items: flex-start; background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 12px; margin-bottom: 8px; box-shadow: var(--shadow); }
   .card.done { opacity: .6; }
   .card.done .title { text-decoration: line-through; }
-  .check { flex: none; width: 26px; height: 26px; margin-top: 1px; border-radius: 50%; border: 2px solid var(--border); background: none; cursor: pointer; display: grid; place-items: center; color: transparent; font-size: 14px; }
+  .check { flex: none; width: 26px; height: 26px; margin-top: 1px; border-radius: 0; border: 2px solid var(--border); background: none; cursor: pointer; display: grid; place-items: center; color: transparent; font-size: 14px; }
   .check.on { background: var(--ok); border-color: var(--ok); color: #fff; }
   .card .body { flex: 1; min-width: 0; }
   .card .top { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
-  .chip { font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
+  .chip { font-size: 12px; font-weight: 700; padding: 1px 8px; border-radius: 0; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
   .chip.exam { background: color-mix(in srgb, var(--exam) 15%, transparent); color: var(--exam); }
   .title { font-weight: 600; overflow-wrap: anywhere; }
   .memo { color: var(--muted); font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 2px; }
@@ -59,20 +59,20 @@
   .due.soon { color: var(--warn); font-weight: 600; }
   .due.over { color: var(--danger); font-weight: 600; }
   .actions { display: flex; flex: none; }
-  .prio { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
+  .prio { width: 10px; height: 10px; border-radius: 0; flex: none; display: inline-block; }
   .prio.High { background: var(--danger); } .prio.Medium { background: var(--warn); } .prio.Low { background: var(--ok); }
-  .status-select { border: 1px solid var(--border); border-radius: 8px; background: var(--surface-2); padding: 2px 6px; font-size: 13px; }
+  .status-select { border: 1px solid var(--border); border-radius: 0; background: var(--surface-2); padding: 2px 6px; font-size: 13px; }
 
   .cal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   .cal-head h2 { margin: 0; font-size: 18px; }
-  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; background: var(--border); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; background: var(--border); border: 1px solid var(--border); border-radius: 0; overflow: hidden; }
   .cal .dow { background: var(--surface-2); text-align: center; font-size: 12px; font-weight: 700; color: var(--muted); padding: 4px 0; }
   .cal .day { background: var(--surface); min-height: 64px; padding: 4px; cursor: pointer; display: flex; flex-direction: column; gap: 2px; min-width: 0; border: 0; text-align: left; }
   .cal .day.other { opacity: .4; }
-  .cal .day.today .num { background: var(--accent); color: var(--accent-text); border-radius: 999px; padding: 0 6px; }
+  .cal .day.today .num { background: var(--accent); color: var(--accent-text); border-radius: 0; padding: 0 6px; }
   .cal .day.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
   .cal .num { font-size: 12px; font-weight: 700; align-self: flex-start; }
-  .cal .item { font-size: 11px; line-height: 1.3; border-radius: 4px; padding: 0 3px; background: color-mix(in srgb, var(--accent) 14%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .cal .item { font-size: 11px; line-height: 1.3; border-radius: 0; padding: 0 3px; background: color-mix(in srgb, var(--accent) 14%, transparent); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .cal .item.exam { background: color-mix(in srgb, var(--exam) 18%, transparent); }
   .cal .item.task { background: var(--surface-2); }
   .cal .item.done { opacity: .5; text-decoration: line-through; }
@@ -82,10 +82,10 @@
   .done-btn { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   .done-btn:disabled { text-decoration: none; cursor: default; }
   .people { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .person { display: inline-flex; align-items: center; gap: 5px; background: var(--surface-2); border-radius: 999px; padding: 2px 10px 2px 2px; font-size: 13px; max-width: 100%; }
+  .person { display: inline-flex; align-items: center; gap: 5px; background: var(--surface-2); border-radius: 0; padding: 2px 10px 2px 2px; font-size: 13px; max-width: 100%; }
   .person img, .person .noimg { width: 22px; height: 22px; border-radius: 50%; flex: none; background: var(--border); }
   .person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; }
+  .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; }
   .panel h2 { margin: 0; font-size: 16px; }
   .panel .hint { font-size: 12px; }
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -108,34 +108,36 @@
     .cal .item.subj { background: hsl(var(--h) 35% 26%); }
     .meter.subjbar > span { background: hsl(var(--h) 60% 58%); }
   }
+  .cal .item.exam-item { background: transparent; box-shadow: inset 0 0 0 1px hsl(var(--h) 55% 45%); }
+  .check-spacer { flex: none; width: 26px; }
   .memo a { color: var(--accent); overflow-wrap: anywhere; }
   .class-rate { color: var(--muted); }
   .search-box { display: flex; gap: 8px; margin-bottom: 12px; }
-  .search-box input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); color: var(--text); font-size: 16px; }
-  .fab { position: fixed; right: max(20px, env(safe-area-inset-right)); bottom: max(20px, env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 50%; border: 0; background: var(--accent); color: var(--accent-text); font-size: 30px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.25); cursor: pointer; }
+  .search-box input { flex: 1; min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 0; background: var(--surface); color: var(--text); font-size: 16px; }
+  .fab { position: fixed; right: max(20px, env(safe-area-inset-right)); bottom: max(20px, env(safe-area-inset-bottom)); width: 56px; height: 56px; border-radius: 0; border: 0; background: var(--accent); color: var(--accent-text); font-size: 30px; line-height: 1; box-shadow: 0 4px 14px rgba(0,0,0,.25); cursor: pointer; }
 
-  dialog { border: 0; border-radius: 16px; padding: 0; width: min(520px, calc(100vw - 24px)); background: var(--surface); color: var(--text); box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+  dialog { border: 0; border-radius: 0; padding: 0; width: min(520px, calc(100vw - 24px)); background: var(--surface); color: var(--text); box-shadow: 0 10px 40px rgba(0,0,0,.3); }
   dialog::backdrop { background: rgba(0,0,0,.45); }
   .dlg { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
   .dlg h3 { margin: 0; }
-  .seg { display: flex; background: var(--surface-2); border-radius: 10px; padding: 3px; }
-  .seg button { flex: 1; border: 0; background: none; padding: 6px; border-radius: 8px; cursor: pointer; font-weight: 600; color: var(--muted); }
+  .seg { display: flex; background: var(--surface-2); border-radius: 0; padding: 3px; }
+  .seg button { flex: 1; border: 0; background: none; padding: 6px; border-radius: 0; cursor: pointer; font-weight: 600; color: var(--muted); }
   .seg button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
   label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
-  .field input, .field textarea, .field select { color: var(--text); padding: 9px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg); font-weight: 400; font-size: 16px; }
+  .field input, .field textarea, .field select { color: var(--text); padding: 9px 10px; border: 1px solid var(--border); border-radius: 0; background: var(--bg); font-weight: 400; font-size: 16px; }
   .field textarea { min-height: 70px; resize: vertical; }
   .quick { display: flex; flex-wrap: wrap; gap: 6px; }
-  .quick button { border: 1px solid var(--border); background: var(--surface-2); border-radius: 999px; padding: 3px 10px; font-size: 13px; cursor: pointer; }
+  .quick button { border: 1px solid var(--border); background: var(--surface-2); border-radius: 0; padding: 3px 10px; font-size: 13px; cursor: pointer; }
   .row { display: flex; gap: 8px; align-items: center; }
   .row input[type=datetime-local] { flex: 1; }
   .hint { font-size: 12px; color: var(--muted); font-weight: 400; }
   .btns { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
-  .btn { border: 0; border-radius: 10px; padding: 9px 16px; font-weight: 700; cursor: pointer; background: var(--surface-2); }
+  .btn { border: 0; border-radius: 0; padding: 9px 16px; font-weight: 700; cursor: pointer; background: var(--surface-2); }
   .btn.primary { background: var(--accent); color: var(--accent-text); }
   .btn.danger { background: none; color: var(--danger); margin-right: auto; }
   .error { color: var(--danger); font-size: 13px; min-height: 1em; }
 
-  .stats { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; margin-bottom: 8px; box-shadow: var(--shadow); }
+  .stats { background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 14px; margin-bottom: 8px; box-shadow: var(--shadow); }
   .stats-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
   .stats-head .label { font-size: 13px; font-weight: 700; color: var(--muted); }
   .stats .seg { padding: 2px; }
@@ -143,8 +145,8 @@
   .stats-main { display: flex; align-items: baseline; gap: 10px; margin: 8px 0 6px; }
   .stats-main .pct { font-size: 34px; font-weight: 800; line-height: 1; }
   .stats-main .sub { color: var(--muted); font-size: 13px; }
-  .meter { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
-  .meter > span { display: block; height: 100%; border-radius: 999px; background: var(--ok); transition: width .3s; }
+  .meter { height: 10px; border-radius: 0; background: var(--surface-2); overflow: hidden; }
+  .meter > span { display: block; height: 100%; border-radius: 0; background: var(--ok); transition: width .3s; }
   .meter.sm { height: 6px; }
   .stats-row { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 13px; color: var(--muted); margin-top: 8px; }
   .stats details { margin-top: 8px; }
@@ -152,7 +154,7 @@
   .subj-row { display: grid; grid-template-columns: minmax(0, 7em) 1fr auto; align-items: center; gap: 8px; font-size: 13px; margin-top: 6px; }
   .subj-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .subj-row .num { color: var(--muted); font-variant-numeric: tabular-nums; }
-  #toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: #222; color: #fff; padding: 8px 14px; border-radius: 10px; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100vw - 32px); }
+  #toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: #222; color: #fff; padding: 8px 14px; border-radius: 0; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100vw - 32px); }
   #toast.show { opacity: .95; }
 
   .login { max-width: 420px; margin: 12vh auto 0; text-align: center; padding: 24px; }
@@ -164,7 +166,6 @@
 <body>
 
 <section class="login" id="login" hidden>
-  <div style="font-size:56px">📚</div>
   <h1>宿題ボード</h1>
   <p>Discord の宿題・テスト・タスクをブラウザで確認して、そのまま完了にできます。</p>
   <a class="btn primary" href="/login">Discord でログイン</a>
@@ -173,11 +174,11 @@
 <div id="app" hidden>
   <header>
     <div class="bar">
-      <span class="brand">📚</span>
+      <span class="brand">宿題ボード</span>
       <select id="guild" aria-label="サーバー"></select>
       <img class="avatar" id="avatar" alt="">
-      <button class="icon-btn" id="open-search" title="検索" aria-label="検索">🔍</button>
-      <button class="icon-btn" id="open-settings" title="設定" aria-label="設定">⚙️</button>
+      <button class="icon-btn" id="open-search" title="検索" aria-label="検索"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg></button>
+      <button class="icon-btn" id="open-settings" title="設定" aria-label="設定"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/><rect x="7" y="4" width="4" height="4" fill="var(--surface)"/><rect x="14" y="10" width="4" height="4" fill="var(--surface)"/><rect x="5" y="16" width="4" height="4" fill="var(--surface)"/></svg></button>
       <button class="icon-btn" id="logout" title="ログアウト">ログアウト</button>
     </div>
     <nav id="tabs">
@@ -209,9 +210,9 @@
     </label>
     <label class="field" data-for="task">優先度
       <select name="priority">
-        <option value="High">🔴 高</option>
-        <option value="Medium" selected>🟡 中</option>
-        <option value="Low">🟢 低</option>
+        <option value="High">高</option>
+        <option value="Medium" selected>中</option>
+        <option value="Low">低</option>
       </select>
     </label>
     <label class="field"><span id="due-label">期限</span>
@@ -237,7 +238,13 @@
 "use strict";
 const $ = (s, el = document) => el.querySelector(s);
 const WD = ["日", "月", "火", "水", "木", "金", "土"];
-const STATUS = { Pending: "⏳ 待機中", InProgress: "🔄 進行中", Done: "✅ 完了" };
+const STATUS = { Pending: "待機中", InProgress: "進行中", Done: "完了" };
+const EDIT_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/><path d="M13 7l4 4"/></svg>';
+function editButton(onclick) {
+  const b = el("button", { class: "icon-btn", title: "編集", "aria-label": "編集", onclick });
+  b.innerHTML = EDIT_ICON; // 固定の SVG だけ
+  return b;
+}
 
 const state = {
   me: null,
@@ -300,9 +307,9 @@ function dueEl(unix, label = "期限") {
   if (!unix) return el("span", { class: "due" }, `${label}なし`);
   const diff = unix * 1000 - Date.now();
   const cls = diff < 0 ? "over" : diff < 86400000 ? "soon" : "";
-  return el("span", { class: `due ${cls}` }, `🗓 ${fmtDate(unix)}・${relative(unix)}`);
+  return el("span", { class: `due ${cls}` }, `${fmtDate(unix)}・${relative(unix)}`);
 }
-function empty(icon, text) { return el("div", { class: "empty" }, el("div", { class: "big" }, icon), el("div", {}, text)); }
+function empty(text) { return el("div", { class: "empty" }, text); }
 
 /// 科目名から色相を決める（同じ科目はいつも同じ色）。
 /// よくある科目は見分けやすい色に固定し、それ以外は名前から12色のどれかに振り分ける
@@ -351,7 +358,7 @@ function classRate(hw) {
 // ── カード ───────────────────────────────────────────────────────────
 function hwCard(hw) {
   const isExam = hw.kind === "exam";
-  const check = isExam ? el("span", { style: "font-size:22px" }, "📝") : el("button", {
+  const check = isExam ? el("span", { class: "check-spacer" }) : el("button", {
     class: `check ${hw.done_by_me ? "on" : ""}`,
     title: hw.done_by_me ? "未完了に戻す" : "完了にする",
     "aria-label": hw.done_by_me ? "未完了に戻す" : "完了にする",
@@ -359,7 +366,7 @@ function hwCard(hw) {
       e.currentTarget.disabled = true;
       try {
         await api(g(`/homework/${hw.id}/done`), { method: "POST", body: { done: !hw.done_by_me } });
-        toast(hw.done_by_me ? "未完了に戻しました" : "✅ 完了にしました！");
+        toast(hw.done_by_me ? "未完了に戻しました" : "完了にしました");
         render();
       } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
     },
@@ -367,7 +374,7 @@ function hwCard(hw) {
   return el("div", { class: `card subj-card ${hw.done_by_me ? "done" : ""}`, style: `--h:${subjectHue(hw.subject)}` },
     check,
     el("div", { class: "body" },
-      subjectHead(hw.subject, isExam ? "📝 テスト" : null, hw.repeat ? "🔁 毎週" : null),
+      subjectHead(hw.subject, isExam ? "テスト" : null, hw.repeat ? "毎週" : null),
       el("span", { class: "title block" }, hw.title),
       hw.memo ? el("div", { class: "memo" }, ...linkify(hw.memo)) : null,
       el("div", { class: "meta" },
@@ -376,11 +383,11 @@ function hwCard(hw) {
           type: "button", class: "done-btn", disabled: hw.done_count === 0,
           title: "完了した人を見る", "aria-expanded": "false",
           onclick: (e) => toggleDoneBy(e.currentTarget, hw),
-        }, `✅ 完了 ${hw.done_count}人`),
+        }, `完了 ${hw.done_count}人`),
         isExam ? null : classRate(hw),
         el("span", {}, `#${hw.id}`))),
     el("div", { class: "actions" },
-      el("button", { class: "icon-btn", title: "編集", onclick: () => openEditor(hw.kind, hw) }, "✏️")));
+      editButton(() => openEditor(hw.kind, hw))));
 }
 
 /// 「完了 ○人」を押すと、完了した人の名前とアイコンを出す
@@ -416,11 +423,11 @@ function taskCard(t) {
       t.description ? el("div", { class: "memo" }, ...linkify(t.description)) : null,
       el("div", { class: "meta" },
         dueEl(t.due_unix),
-        t.assignees.length ? el("span", {}, `👤 担当 ${t.assignees.length}人`) : null,
+        t.assignees.length ? el("span", {}, `担当 ${t.assignees.length}人`) : null,
         el("span", {}, `#${t.id}`)),
       el("div", { class: "meta" }, select)),
     el("div", { class: "actions" },
-      el("button", { class: "icon-btn", title: "編集", onclick: () => openEditor("task", t) }, "✏️")));
+      editButton(() => openEditor("task", t))));
 }
 
 function pastToggle() {
@@ -450,7 +457,7 @@ function statsCard(st) {
       type: "button", class: state.statsPeriod === k ? "active" : "",
       onclick: () => { state.statsPeriod = k; localStorage.setItem("statsPeriod", k); render(); },
     }, label)));
-  const card = el("div", { class: "stats" }, el("div", { class: "stats-head" }, el("span", { class: "label" }, `📊 ${st.label} の達成率`), seg));
+  const card = el("div", { class: "stats" }, el("div", { class: "stats-head" }, el("span", { class: "label" }, `${st.label} の達成率`), seg));
   if (!st.overall.total) {
     card.append(el("div", { class: "stats-row" }, "この期間の宿題はありません"));
     return card;
@@ -459,7 +466,7 @@ function statsCard(st) {
     el("div", { class: "stats-main" }, el("span", { class: "pct" }, `${pct(st.overall)}%`), el("span", { class: "sub" }, `${st.overall.done} / ${st.overall.total} 件 完了`)),
     meter(st.overall),
     el("div", { class: "stats-row" },
-      el("span", {}, st.past.total ? `期限が過ぎた宿題 ${st.past.done}/${st.past.total}${st.past.done === st.past.total ? " 🎉" : ""}` : "期限が過ぎた宿題 なし"),
+      el("span", {}, st.past.total ? `期限が過ぎた宿題 ${st.past.done}/${st.past.total}` : "期限が過ぎた宿題 なし"),
       el("span", {}, `これから ${st.upcoming.done}/${st.upcoming.total}`),
       st.class.average == null ? null : el("span", { title: "宿題の完了を記録したことがある人の平均" },
         `クラス平均 ${st.class.average}%（${st.class.participants}人）`)));
@@ -481,18 +488,18 @@ async function viewTodo(v) {
   const now = Date.now() / 1000;
   const over = list.filter((h) => h.due_unix < now);
   const rest = list.filter((h) => h.due_unix >= now);
-  if (!list.length) v.append(empty("🎉", "未完了の宿題はありません！"));
-  if (over.length) v.append(el("div", { class: "section-title" }, `⚠️ 期限切れ（${over.length}）`), ...over.map(hwCard));
-  if (rest.length) v.append(el("div", { class: "section-title" }, `📚 これから（${rest.length}）`), ...rest.map(hwCard));
+  if (!list.length) v.append(empty("未完了の宿題はありません"));
+  if (over.length) v.append(el("div", { class: "section-title" }, `期限切れ（${over.length}）`), ...over.map(hwCard));
+  if (rest.length) v.append(el("div", { class: "section-title" }, `これから（${rest.length}）`), ...rest.map(hwCard));
   const soon = exams.filter((e) => e.due_unix - now < 14 * 86400);
-  if (soon.length) v.append(el("div", { class: "section-title" }, "📝 2週間以内のテスト"), ...soon.map(hwCard));
+  if (soon.length) v.append(el("div", { class: "section-title" }, "2週間以内のテスト"), ...soon.map(hwCard));
 }
 
 async function viewHw(v, kind) {
   v.append(el("div", { class: "toolbar" }, el("span", {}, kind === "exam" ? "テストの予定" : "みんなの宿題"), pastToggle()));
   const scope = state.past ? "past" : "upcoming";
   const list = await api(g(`/homework?scope=${scope}&kind=${kind}`));
-  if (!list.length) v.append(empty(kind === "exam" ? "📝" : "📚", kind === "exam" ? "テストの予定はありません" : "宿題はありません。＋ から追加できます"));
+  if (!list.length) v.append(empty(kind === "exam" ? "テストの予定はありません" : "宿題はありません。＋ から追加できます"));
   v.append(...list.map(hwCard));
 }
 
@@ -502,7 +509,7 @@ async function viewTasks(v) {
       el("input", { type: "checkbox", checked: state.past, onchange: (e) => { state.past = e.target.checked; render(); } }),
       "完了したものも表示")));
   const list = await api(g(`/tasks?scope=${state.past ? "all" : "open"}`));
-  if (!list.length) v.append(empty("📋", "タスクはありません"));
+  if (!list.length) v.append(empty("タスクはありません"));
   v.append(...list.map(taskCard));
 }
 
@@ -536,9 +543,10 @@ async function viewCalendar(v) {
     items.slice(0, 3).forEach(({ type, item }) => {
       const done = type === "task" ? item.status === "Done" : item.done_by_me;
       // セルが狭いので科目だけ（内容は下の一覧に出る）
-      const label = type === "task" ? item.title : type === "exam" ? `📝${item.subject}` : item.subject;
+      const label = type === "task" ? item.title : item.subject;
       cell.append(el("span", {
-        class: `item ${type === "task" ? "task" : "subj"} ${done ? "done" : ""}`,
+        class: `item ${type === "task" ? "task" : "subj"} ${type === "exam" ? "exam-item" : ""} ${done ? "done" : ""}`,
+        title: type === "exam" ? "テスト" : null,
         style: type === "task" ? null : `--h:${subjectHue(item.subject)}`,
       }, label));
     });
@@ -557,13 +565,13 @@ async function viewCalendar(v) {
 
 // ── 検索 ─────────────────────────────────────────────────────────────
 async function showSearchResults(box, q) {
-  if (!q.trim()) { box.replaceChildren(empty("🔍", "科目・内容・メモ・タスク名で探せます（期限が過ぎたものも含みます）")); return; }
+  if (!q.trim()) { box.replaceChildren(empty("科目・内容・メモ・タスク名で探せます（期限が過ぎたものも含みます）")); return; }
   const r = await api(g(`/search?q=${encodeURIComponent(q.trim())}`));
   if (q !== state.searchQ) return; // 入力が変わっていたら古い結果は捨てる
   const parts = [];
-  if (r.homework.length) parts.push(el("div", { class: "section-title" }, `📚 宿題・テスト（${r.homework.length}）`), ...r.homework.map(hwCard));
-  if (r.tasks.length) parts.push(el("div", { class: "section-title" }, `📋 タスク（${r.tasks.length}）`), ...r.tasks.map(taskCard));
-  box.replaceChildren(...(parts.length ? parts : [empty("🤔", `「${q.trim()}」に一致するものはありません`)]));
+  if (r.homework.length) parts.push(el("div", { class: "section-title" }, `宿題・テスト（${r.homework.length}）`), ...r.homework.map(hwCard));
+  if (r.tasks.length) parts.push(el("div", { class: "section-title" }, `タスク（${r.tasks.length}）`), ...r.tasks.map(taskCard));
+  box.replaceChildren(...(parts.length ? parts : [empty(`「${q.trim()}」に一致するものはありません`)]));
 }
 
 async function viewSearch(v) {
@@ -626,9 +634,9 @@ async function viewSettings(v) {
     default_time: defaultTime.value,
   }, saveServer));
   v.append(el("section", { class: "panel" },
-    el("h2", {}, "⚙️ サーバーの設定"),
+    el("h2", {}, "サーバーの設定"),
     el("span", { class: "hint" }, `時刻は ${st.timezone}。サーバーのみんなに反映されます。`),
-    field("通知・まとめ投稿のチャンネル", channel, st.channels.length ? null : "⚠️ チャンネル一覧を取得できませんでした"),
+    field("通知・まとめ投稿のチャンネル", channel, st.channels.length ? null : "チャンネル一覧を取得できませんでした"),
     el("div", { class: "row2" },
       field("期限前のチャンネル通知", remind),
       field("時刻を省略したときの期限", defaultTime)),
@@ -644,18 +652,18 @@ async function viewSettings(v) {
   const saveDm = el("button", { type: "button", class: "btn primary" }, "保存");
   saveDm.addEventListener("click", () => saveSettings("/me/notify", "PUT", { remind_before: Number(dm.value) || null }, saveDm));
   v.append(el("section", { class: "panel" },
-    el("h2", {}, "🔔 自分への DM 通知"),
+    el("h2", {}, "自分への DM 通知"),
     field("未完了の宿題・テストを DM で知らせるタイミング", dm, "サーバーメンバーからの DM を許可しておいてください"),
     el("div", { class: "btns" }, saveDm)));
 
   // 毎週の宿題
-  const panel = el("section", { class: "panel" }, el("h2", {}, "🔁 毎週の宿題"),
+  const panel = el("section", { class: "panel" }, el("h2", {}, "毎週の宿題"),
     el("span", { class: "hint" }, "期限が過ぎると翌週の分が自動で登録されます。止めても登録済みの宿題は残ります。"));
   if (!repeats.length) panel.append(el("div", { class: "hint" }, "まだありません"));
   for (const r of repeats) {
     panel.append(el("div", { class: "repeat" },
       el("div", { class: "body" },
-        el("div", { style: `--h:${subjectHue(r.subject)}` }, subjectHead(r.subject, "🔁 毎週")),
+        el("div", { style: `--h:${subjectHue(r.subject)}` }, subjectHead(r.subject, "毎週")),
         el("span", { class: "title block" }, r.title),
         el("div", { class: "meta" }, el("span", {}, `毎週${WEEKDAY_NAMES[r.weekday]} ${r.time}`), el("span", {}, `#${r.id}`)),
         r.memo ? el("div", { class: "memo" }, r.memo) : null),
@@ -701,7 +709,7 @@ async function render() {
   $("#open-search").classList.toggle("active", state.tab === "search");
   $("#add").hidden = !state.guild || state.tab === "settings" || state.tab === "search";
   const v = $("#view");
-  if (!state.guild) { v.replaceChildren(empty("🤖", "ボットが入っているサーバーがありません。ボットがいるサーバーに参加してから、もう一度ログインしてください。")); return; }
+  if (!state.guild) { v.replaceChildren(empty("ボットが入っているサーバーがありません。ボットがいるサーバーに参加してから、もう一度ログインしてください。")); return; }
   const next = el("div");
   try {
     if (state.tab === "todo") await viewTodo(next);
@@ -711,7 +719,7 @@ async function render() {
     else if (state.tab === "settings") await viewSettings(next);
     else if (state.tab === "search") await viewSearch(next);
     else await viewCalendar(next);
-  } catch (err) { next.replaceChildren(empty("⚠️", err.message)); }
+  } catch (err) { next.replaceChildren(empty(err.message)); }
   v.replaceChildren(next);
 }
 
