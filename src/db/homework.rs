@@ -185,6 +185,14 @@ impl Database {
                 args.push(subject);
                 sql += &format!(" AND h.subject = ?{}", args.len());
             }
+            if let Some(keyword) = query.keyword {
+                args.push(format!("%{}%", super::escape_like(&keyword)));
+                let n = args.len();
+                sql += &format!(
+                    " AND (h.subject LIKE ?{n} ESCAPE '\\' OR h.title LIKE ?{n} ESCAPE '\\'
+                           OR IFNULL(h.description, '') LIKE ?{n} ESCAPE '\\')"
+                );
+            }
             if let Some(from) = query.due_from {
                 args.push(from);
                 sql += &format!(" AND h.due_date >= ?{}", args.len());
@@ -298,6 +306,22 @@ impl Database {
             tx.execute("DELETE FROM homework WHERE id = ?1", params![id])?;
             tx.commit()?;
             Ok(Some(hw))
+        })
+        .await
+    }
+
+    /// 宿題の完了を記録したことがある人（クラスの完了率の分母に使う）
+    pub async fn hw_participants(&self, guild_id: String) -> Result<Vec<String>, crate::Error> {
+        self.call(move |conn| {
+            let users = conn
+                .prepare(
+                    "SELECT DISTINCT p.user_id FROM hw_progress p
+                     JOIN homework h ON h.id = p.homework_id
+                     WHERE h.guild_id = ?1 ORDER BY p.user_id",
+                )?
+                .query_map(params![guild_id], |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(users)
         })
         .await
     }
@@ -1023,6 +1047,54 @@ mod tests {
         assert_eq!(range.len(), 1);
 
         assert_eq!(db.hw_subjects("G".into()).await.unwrap(), ["数学", "英語"]);
+    }
+
+    #[tokio::test]
+    async fn keyword_search_and_participants() {
+        let db = test_db();
+        let a = add(&db, "G", "数学", "2999-01-01 08:30").await;
+        let mut hw = new_hw(HwKind::Exam, "G", "英語", "2999-01-02 08:30");
+        hw.description = Some("範囲は 100% 暗記".into());
+        let b = db.hw_add(hw).await.unwrap().0;
+        add(&db, "H", "数学", "2999-01-01 08:30").await;
+
+        let search = |kw: &str| HwQuery {
+            keyword: Some(kw.into()),
+            ..Default::default()
+        };
+        let ids = |list: Vec<Homework>| list.into_iter().map(|h| h.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(db.hw_list("G".into(), search("数学")).await.unwrap()),
+            [a]
+        );
+        assert_eq!(
+            ids(db.hw_list("G".into(), search("暗記")).await.unwrap()),
+            [b]
+        );
+        // ワイルドカードは文字として扱う
+        assert_eq!(
+            ids(db.hw_list("G".into(), search("100%")).await.unwrap()),
+            [b]
+        );
+        assert!(
+            db.hw_list("G".into(), search("_"))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+
+        assert!(db.hw_participants("G".into()).await.unwrap().is_empty());
+        db.hw_set_done(a, "G".into(), "u2".into(), true)
+            .await
+            .unwrap();
+        db.hw_set_done(a, "G".into(), "u1".into(), true)
+            .await
+            .unwrap();
+        db.hw_set_done(b, "G".into(), "u1".into(), true)
+            .await
+            .unwrap();
+        assert_eq!(db.hw_participants("G".into()).await.unwrap(), ["u1", "u2"]);
+        assert!(db.hw_participants("H".into()).await.unwrap().is_empty());
     }
 
     #[tokio::test]

@@ -16,7 +16,7 @@ use crate::{
         Homework, HwKind, HwQuery, HwRepeat, HwSettings, HwSettingsPatch, NewHomework, Priority,
         Task, TaskQuery, TaskSort, TaskStatus,
     },
-    stats::{self as hw_stats, HwStats, StatsPeriod},
+    stats::{self as hw_stats, ClassStats, HwStats, StatsPeriod},
     time::{DUE_FORMAT, due_to_utc, local_now, next_weekly, parse_due_input, parse_time, timezone},
 };
 
@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .route("/me", get(me))
         .route("/guilds/{gid}/subjects", get(subjects))
         .route("/guilds/{gid}/stats", get(stats))
+        .route("/guilds/{gid}/search", get(search))
         .route(
             "/guilds/{gid}/homework",
             get(list_homework).post(create_homework),
@@ -195,6 +196,7 @@ struct StatsDto {
     label: String,
     #[serde(flatten)]
     stats: HwStats,
+    class: ClassStats,
 }
 
 /// ログインしている人の宿題の達成率
@@ -212,7 +214,7 @@ async fn stats(
     let list = state
         .db
         .hw_list(
-            gid,
+            gid.clone(),
             HwQuery {
                 kind: Some(HwKind::Homework),
                 due_from,
@@ -221,9 +223,11 @@ async fn stats(
             },
         )
         .await?;
+    let participants = state.db.hw_participants(gid).await?;
     Ok(Json(StatsDto {
         label,
         stats: hw_stats::compute(&list, &auth.user_id, now),
+        class: hw_stats::class_average(&list, &participants),
     }))
 }
 
@@ -241,14 +245,17 @@ struct HwDto {
     due: String,
     due_unix: i64,
     done_count: usize,
+    /// クラスの人数（宿題の完了を記録したことがある人）。done_count / class_size がクラスの完了率
+    class_size: usize,
     done_by_me: bool,
     created_by: String,
     repeat: bool,
     can_delete: bool,
 }
 
-fn hw_dto(hw: Homework, auth: &Auth, guild: &WebGuild) -> HwDto {
+fn hw_dto(hw: Homework, auth: &Auth, guild: &WebGuild, class_size: usize) -> HwDto {
     HwDto {
+        class_size,
         id: hw.id,
         kind: hw.kind.as_str(),
         due_unix: due_unix(&hw.due_date),
@@ -320,10 +327,11 @@ async fn list_homework(
         },
         s => return Err(ApiError::bad_request(format!("scope `{s}` は不正です"))),
     };
+    let class_size = state.db.hw_participants(gid.clone()).await?.len();
     let list = state.db.hw_list(gid, query).await?;
     Ok(Json(
         list.into_iter()
-            .map(|hw| hw_dto(hw, &auth, &guild))
+            .map(|hw| hw_dto(hw, &auth, &guild, class_size))
             .collect(),
     ))
 }
@@ -394,7 +402,8 @@ async fn create_homework(
     } else {
         StatusCode::OK
     };
-    Ok((status, Json(hw_dto(hw, &auth, &guild))))
+    let class_size = state.db.hw_participants(hw.guild_id.clone()).await?.len();
+    Ok((status, Json(hw_dto(hw, &auth, &guild, class_size))))
 }
 
 async fn edit_homework(
@@ -427,7 +436,8 @@ async fn edit_homework(
         .hw_edit(id, gid, edit)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("#{id} が見つかりません")))?;
-    Ok(Json(hw_dto(hw, &auth, &guild)))
+    let class_size = state.db.hw_participants(hw.guild_id.clone()).await?.len();
+    Ok(Json(hw_dto(hw, &auth, &guild, class_size)))
 }
 
 async fn delete_homework(
@@ -479,7 +489,8 @@ async fn set_done(
         .hw_get(id, gid)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("#{id} が見つかりません")))?;
-    Ok(Json(hw_dto(hw, &auth, &guild)))
+    let class_size = state.db.hw_participants(hw.guild_id.clone()).await?.len();
+    Ok(Json(hw_dto(hw, &auth, &guild, class_size)))
 }
 
 #[derive(Serialize)]
@@ -514,6 +525,79 @@ async fn done_by(
         });
     }
     Ok(Json(users))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 検索
+// ────────────────────────────────────────────────────────────────────────────
+
+/// 検索結果の上限（種類ごと）
+const SEARCH_LIMIT: usize = 50;
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SearchDto {
+    homework: Vec<HwDto>,
+    tasks: Vec<TaskDto>,
+}
+
+/// 宿題・テスト（科目・内容・メモ）とタスク（タイトル・説明）をキーワードで探す。
+/// 過去のものも含め、宿題は期限の新しい順・タスクは期限の近い順で返す
+async fn search(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(gid): Path<String>,
+    Query(q): Query<SearchQuery>,
+) -> ApiResult<SearchDto> {
+    let guild = auth.guild(&state, &gid)?.clone();
+    let keyword = q.q.as_deref().map(str::trim).unwrap_or("");
+    if keyword.is_empty() {
+        return Ok(Json(SearchDto {
+            homework: vec![],
+            tasks: vec![],
+        }));
+    }
+    if keyword.chars().count() > 100 {
+        return Err(ApiError::bad_request(
+            "キーワードは100文字以内にしてください",
+        ));
+    }
+
+    let class_size = state.db.hw_participants(gid.clone()).await?.len();
+    let homework = state
+        .db
+        .hw_list(
+            gid.clone(),
+            HwQuery {
+                keyword: Some(keyword.to_string()),
+                newest_first: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+    let tasks = state
+        .db
+        .list_tasks(
+            gid,
+            TaskQuery {
+                keyword: Some(keyword.to_string()),
+                sort: TaskSort::DueDate,
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(Json(SearchDto {
+        homework: homework
+            .into_iter()
+            .take(SEARCH_LIMIT)
+            .map(|hw| hw_dto(hw, &auth, &guild, class_size))
+            .collect(),
+        tasks: tasks.into_iter().take(SEARCH_LIMIT).map(task_dto).collect(),
+    }))
 }
 
 // ────────────────────────────────────────────────────────────────────────────

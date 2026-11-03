@@ -127,6 +127,29 @@ pub struct HwStats {
     pub by_subject: Vec<SubjectCount>,
 }
 
+/// クラス全体の達成率
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ClassStats {
+    /// 参加者の達成率の平均（0〜100、宿題か参加者がいなければ None）
+    pub average: Option<u32>,
+    /// 宿題の完了を記録したことがある人の数
+    pub participants: usize,
+}
+
+/// 参加者（宿題の完了を記録したことがある人）の平均達成率（テストは対象外）
+pub fn class_average(list: &[Homework], participants: &[String]) -> ClassStats {
+    let homework: Vec<&Homework> = list.iter().filter(|h| h.kind == HwKind::Homework).collect();
+    let slots = homework.len() * participants.len();
+    let done: usize = homework
+        .iter()
+        .map(|h| participants.iter().filter(|p| h.is_done_by(p)).count())
+        .sum();
+    ClassStats {
+        average: (slots > 0).then(|| (done * 100 / slots) as u32),
+        participants: participants.len(),
+    }
+}
+
 /// 宿題の一覧から user の達成率を集計する（テストは対象外）
 pub fn compute(list: &[Homework], user_id: &str, now: NaiveDateTime) -> HwStats {
     let now = now.format(DUE_FORMAT).to_string();
@@ -212,6 +235,26 @@ mod tests {
         assert_eq!(s.by_subject[0].count, Count { done: 1, total: 3 });
         assert_eq!(s.by_subject[1].count, Count { done: 1, total: 1 });
         assert_eq!(s.overall.percent(), Some(50));
+    }
+
+    #[test]
+    fn computes_class_average() {
+        let list = [
+            hw(HwKind::Homework, "数学", "2025-10-08 08:30", &["a", "b"]),
+            hw(HwKind::Homework, "英語", "2025-10-09 08:30", &["a"]),
+            hw(HwKind::Exam, "英語", "2025-10-10 10:00", &[]),
+        ];
+        let people = ["a".to_string(), "b".to_string()];
+        // a: 2/2, b: 1/2 → 3/4 = 75%
+        assert_eq!(
+            class_average(&list, &people),
+            ClassStats {
+                average: Some(75),
+                participants: 2
+            }
+        );
+        assert_eq!(class_average(&list, &[]).average, None);
+        assert_eq!(class_average(&[], &people).average, None);
     }
 
     #[test]

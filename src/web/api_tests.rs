@@ -724,6 +724,160 @@ async fn repeats_can_be_added_and_removed() {
 }
 
 #[tokio::test]
+async fn search_finds_homework_and_tasks() {
+    let state = test_state();
+    let alice = login_as(&state, "1", false).await;
+    let hw = format!("/api/guilds/{GUILD}/homework");
+    call(
+        &state,
+        "POST",
+        &hw,
+        Some(&alice),
+        Some(json!({ "subject": "数学", "title": "プリント", "due": "2999-01-05" })),
+    )
+    .await;
+    call(&state, "POST", &hw, Some(&alice), Some(json!({ "subject": "英語", "title": "単語", "due": "2999-01-06", "memo": "数学の後でやる" }))).await;
+    call(
+        &state,
+        "POST",
+        &hw,
+        Some(&alice),
+        Some(
+            json!({ "kind": "exam", "subject": "数学", "title": "小テスト", "due": "2000-01-01" }),
+        ),
+    )
+    .await;
+    call(
+        &state,
+        "POST",
+        &format!("/api/guilds/{GUILD}/tasks"),
+        Some(&alice),
+        Some(json!({ "title": "数学の先生に提出" })),
+    )
+    .await;
+
+    let search = |q: &str| format!("/api/guilds/{GUILD}/search?q={q}");
+    let (status, r) = call(
+        &state,
+        "GET",
+        &search("%E6%95%B0%E5%AD%A6"),
+        Some(&alice),
+        None,
+    )
+    .await; // 数学
+    assert_eq!(status, StatusCode::OK);
+    // 科目・メモ・過去のテストも含む（期限の新しい順）
+    let titles: Vec<_> = r["homework"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["単語", "プリント", "小テスト"]);
+    assert_eq!(r["tasks"][0]["title"], "数学の先生に提出");
+
+    let (_, r) = call(&state, "GET", &search("%20%20"), Some(&alice), None).await;
+    assert_eq!(r, json!({ "homework": [], "tasks": [] }));
+    let (_, r) = call(&state, "GET", &search("zzz"), Some(&alice), None).await;
+    assert_eq!(r, json!({ "homework": [], "tasks": [] }));
+    let (status, _) = call(
+        &state,
+        "GET",
+        "/api/guilds/999/search?q=a",
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn class_rate_uses_participants() {
+    let state = test_state();
+    let alice = login_as(&state, "1", false).await;
+    let bob = login_as(&state, "2", false).await;
+    let hw = format!("/api/guilds/{GUILD}/homework");
+    let (_, a) = call(
+        &state,
+        "POST",
+        &hw,
+        Some(&alice),
+        Some(json!({ "subject": "数学", "title": "a", "due": "2999-01-05" })),
+    )
+    .await;
+    let (_, b) = call(
+        &state,
+        "POST",
+        &hw,
+        Some(&alice),
+        Some(json!({ "subject": "英語", "title": "b", "due": "2999-01-06" })),
+    )
+    .await;
+    let (a, b) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
+
+    // まだ誰も完了を記録していない
+    let (_, list) = call(
+        &state,
+        "GET",
+        &format!("{hw}?scope=upcoming"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(list[0]["class_size"], 0);
+
+    call(
+        &state,
+        "POST",
+        &format!("{hw}/{a}/done"),
+        Some(&alice),
+        Some(json!({ "done": true })),
+    )
+    .await;
+    call(
+        &state,
+        "POST",
+        &format!("{hw}/{b}/done"),
+        Some(&alice),
+        Some(json!({ "done": true })),
+    )
+    .await;
+    let (_, done) = call(
+        &state,
+        "POST",
+        &format!("{hw}/{a}/done"),
+        Some(&bob),
+        Some(json!({ "done": true })),
+    )
+    .await;
+    assert_eq!(done["class_size"], 2);
+    assert_eq!(done["done_count"], 2);
+
+    let (_, list) = call(
+        &state,
+        "GET",
+        &format!("{hw}?scope=upcoming"),
+        Some(&bob),
+        None,
+    )
+    .await;
+    assert_eq!(list[1]["done_count"], 1);
+    assert_eq!(list[1]["class_size"], 2);
+
+    // アリス 2/2・ボブ 1/2 → 75%
+    let (_, s) = call(
+        &state,
+        "GET",
+        &format!("/api/guilds/{GUILD}/stats?period=all"),
+        Some(&bob),
+        None,
+    )
+    .await;
+    assert_eq!(s["class"], json!({ "average": 75, "participants": 2 }));
+    assert_eq!(s["overall"], json!({ "done": 1, "total": 2 }));
+}
+
+#[tokio::test]
 async fn task_flow_add_status_edit_delete() {
     let state = test_state();
     let cookie = login_as(&state, "1", false).await;
@@ -886,7 +1040,7 @@ async fn serve_demo() {
             "国語",
             "読書感想文",
             day(5, "08:30"),
-            Some("原稿用紙3枚"),
+            Some("原稿用紙3枚。提出はこちら: https://forms.example.com/hw?id=3。"),
         ),
         ("homework", "理科", "実験レポート", day(-1, "17:00"), None),
         (

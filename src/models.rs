@@ -264,6 +264,8 @@ pub struct HwQuery {
     /// 種類（None ならすべて）
     pub kind: Option<HwKind>,
     pub subject: Option<String>,
+    /// 科目・内容・メモに含まれるキーワード
+    pub keyword: Option<String>,
     /// この期限以降（正規化フォーマット、含む）
     pub due_from: Option<String>,
     /// この期限より前（正規化フォーマット、含まない）
