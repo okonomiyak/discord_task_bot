@@ -94,11 +94,17 @@
   .repeat .body { flex: 1; min-width: 0; }
   .icon-btn.active { color: var(--accent); background: var(--surface-2); }
   /* 科目ごとの色（--h は科目名から決まる色相） */
-  .chip.subj { background: hsl(var(--h) 75% 92%); color: hsl(var(--h) 55% 32%); }
+  /* 科目は色付きの小さな見出しとして内容の上に出し、カードの左端に科目の色の線を引く */
+  .subj-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; font-weight: 700; line-height: 1.4; color: hsl(var(--h) 55% 36%); }
+  .subj-head .tag { font-weight: 600; color: var(--muted); }
+  .card.subj-card { border-left: 4px solid hsl(var(--h) 60% 55%); }
+  .card .title.block { display: block; margin-top: 1px; }
+  .subj-name { font-size: 13px; font-weight: 700; color: hsl(var(--h) 55% 36%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cal .item.subj { background: hsl(var(--h) 75% 90%); }
   .meter.subjbar > span { background: hsl(var(--h) 60% 46%); }
   @media (prefers-color-scheme: dark) {
-    .chip.subj { background: hsl(var(--h) 35% 24%); color: hsl(var(--h) 75% 80%); }
+    .subj-head, .subj-name { color: hsl(var(--h) 70% 72%); }
+    .card.subj-card { border-left-color: hsl(var(--h) 45% 50%); }
     .cal .item.subj { background: hsl(var(--h) 35% 26%); }
     .meter.subjbar > span { background: hsl(var(--h) 60% 58%); }
   }
@@ -312,8 +318,12 @@ function subjectHue(subject) {
   for (const ch of subject) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; }
   return PALETTE[h % PALETTE.length];
 }
-function subjectChip(subject, text = subject) {
-  return el("span", { class: "chip subj", style: `--h:${subjectHue(subject)}` }, text);
+/// 内容の上に出す科目の見出し（tags はテスト・毎週などの補足）
+function subjectHead(subject, ...tags) {
+  return el("div", { class: "subj-head" }, el("span", {}, subject), ...tags.filter(Boolean).map((t) => el("span", { class: "tag" }, t)));
+}
+function subjectName(subject) {
+  return el("span", { class: "subj-name", title: subject, style: `--h:${subjectHue(subject)}` }, subject);
 }
 
 /// メモの URL をリンクにする（http/https だけ。それ以外は文字のまま）
@@ -354,13 +364,11 @@ function hwCard(hw) {
       } catch (err) { toast(err.message); e.currentTarget.disabled = false; }
     },
   }, "✓");
-  return el("div", { class: `card ${hw.done_by_me ? "done" : ""}` },
+  return el("div", { class: `card subj-card ${hw.done_by_me ? "done" : ""}`, style: `--h:${subjectHue(hw.subject)}` },
     check,
     el("div", { class: "body" },
-      el("div", { class: "top" },
-        subjectChip(hw.subject, isExam ? `📝 テスト・${hw.subject}` : hw.subject),
-        hw.repeat ? el("span", { class: "chip", title: "毎週の宿題" }, "🔁 毎週") : null,
-        el("span", { class: "title" }, hw.title)),
+      subjectHead(hw.subject, isExam ? "📝 テスト" : null, hw.repeat ? "🔁 毎週" : null),
+      el("span", { class: "title block" }, hw.title),
       hw.memo ? el("div", { class: "memo" }, ...linkify(hw.memo)) : null,
       el("div", { class: "meta" },
         dueEl(hw.due_unix, isExam ? "日時" : "期限"),
@@ -458,7 +466,7 @@ function statsCard(st) {
   if (st.by_subject.length) {
     card.append(el("details", {}, el("summary", {}, "科目別"),
       ...st.by_subject.map((sc) => el("div", { class: "subj-row" },
-        subjectChip(sc.subject), subjMeter(sc), el("span", { class: "num" }, `${pct(sc)}% (${sc.done}/${sc.total})`)))));
+        subjectName(sc.subject), subjMeter(sc), el("span", { class: "num" }, `${pct(sc)}% (${sc.done}/${sc.total})`)))));
   }
   return card;
 }
@@ -647,7 +655,8 @@ async function viewSettings(v) {
   for (const r of repeats) {
     panel.append(el("div", { class: "repeat" },
       el("div", { class: "body" },
-        el("div", { class: "top" }, el("span", { class: "chip" }, r.subject), el("span", { class: "title" }, r.title)),
+        el("div", { style: `--h:${subjectHue(r.subject)}` }, subjectHead(r.subject, "🔁 毎週")),
+        el("span", { class: "title block" }, r.title),
         el("div", { class: "meta" }, el("span", {}, `毎週${WEEKDAY_NAMES[r.weekday]} ${r.time}`), el("span", {}, `#${r.id}`)),
         r.memo ? el("div", { class: "memo" }, r.memo) : null),
       r.can_delete ? el("button", {
