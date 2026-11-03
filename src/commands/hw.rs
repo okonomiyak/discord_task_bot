@@ -1029,7 +1029,7 @@ pub async fn stats(
         .data()
         .db
         .hw_list(
-            guild_id,
+            guild_id.clone(),
             HwQuery {
                 kind: Some(HwKind::Homework),
                 due_from,
@@ -1040,6 +1040,8 @@ pub async fn stats(
         .await?;
     let me = ctx.author();
     let s = stats::compute(&list, &me.id.to_string(), now);
+    let participants = ctx.data().db.hw_participants(guild_id).await?;
+    let class = stats::class_average(&list, &participants);
 
     let mut embed = CreateEmbed::new()
         .title(format!("📊 {} さんの達成率", me.display_name()))
@@ -1081,6 +1083,16 @@ pub async fn stats(
             .map(|sc| format!("`{}` {}", sc.count.bar(), truncate(&sc.subject, 20)))
             .collect();
         embed = embed.field("科目別", subjects.join("\n"), false);
+        if let Some(avg) = class.average {
+            embed = embed.field(
+                "クラス平均",
+                format!(
+                    "{avg}%（完了を記録したことがある {}人の平均）",
+                    class.participants
+                ),
+                false,
+            );
+        }
     }
     embed = embed.footer(serenity::CreateEmbedFooter::new(
         "宿題のみ（テストは含みません）。完了は /hw done やボタンで記録できます",
@@ -1401,7 +1413,7 @@ pub async fn settings(
     };
 
     let mut patch = HwSettingsPatch {
-        channel_id: channel.map(|c| c.id.to_string()),
+        channel_id: channel.map(|c| Some(c.id.to_string())),
         remind_before: remind.map(|r| r.to_seconds()),
         summary_time,
         default_time,
@@ -1423,7 +1435,7 @@ pub async fn settings(
     if matches!(patch.summary_time, Some(Some(_))) && patch.channel_id.is_none() {
         let current = db.hw_settings(guild_id.clone()).await?;
         if current.channel_id.is_none() {
-            patch.channel_id = Some(ctx.channel_id().to_string());
+            patch.channel_id = Some(Some(ctx.channel_id().to_string()));
         }
     }
 

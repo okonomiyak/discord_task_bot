@@ -3,6 +3,7 @@
 mod api;
 #[cfg(test)]
 mod api_tests;
+mod discord;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -14,7 +15,9 @@ use axum::{
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, post},
 };
-use poise::serenity_prelude::{Cache, GuildId, Http};
+use poise::serenity_prelude::{Cache, Http};
+
+use discord::DiscordInfo;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -76,19 +79,11 @@ impl WebConfig {
     }
 }
 
-/// ボットが入っているサーバーの調べ方（テストでは固定のリストを使う）
-#[derive(Clone)]
-enum BotGuilds {
-    Cache(Arc<Cache>),
-    #[cfg(test)]
-    Fixed(Vec<u64>),
-}
-
 #[derive(Clone)]
 pub struct AppState {
     pub db: Database,
     pub http: Arc<Http>,
-    bot_guilds: BotGuilds,
+    discord: DiscordInfo,
     pub config: Arc<WebConfig>,
     client: reqwest::Client,
 }
@@ -97,8 +92,8 @@ impl AppState {
     pub fn new(db: Database, http: Arc<Http>, cache: Arc<Cache>, config: WebConfig) -> Self {
         Self {
             db,
+            discord: DiscordInfo::live(cache, Arc::clone(&http)),
             http,
-            bot_guilds: BotGuilds::Cache(cache),
             config: Arc::new(config),
             client: reqwest::Client::new(),
         }
@@ -106,15 +101,7 @@ impl AppState {
 
     /// ボットがそのサーバーに入っているか
     fn bot_in_guild(&self, guild_id: &str) -> bool {
-        guild_id
-            .parse::<u64>()
-            .ok()
-            .filter(|id| *id > 0)
-            .is_some_and(|id| match &self.bot_guilds {
-                BotGuilds::Cache(cache) => cache.guilds().contains(&GuildId::new(id)),
-                #[cfg(test)]
-                BotGuilds::Fixed(ids) => ids.contains(&id),
-            })
+        self.discord.bot_in_guild(guild_id)
     }
 }
 
@@ -140,6 +127,11 @@ pub async fn serve(state: AppState) {
     println!(
         "Web ダッシュボード: {} （{addr} で待ち受け）",
         state.config.base_url
+    );
+    // Developer Portal の Redirects と1文字でも違うと「redirect_uri が無効です」になる
+    println!(
+        "Discord Developer Portal → OAuth2 → Redirects にこの URL を登録してください: {}",
+        state.config.redirect_uri()
     );
     if let Err(e) = axum::serve(listener, router(state)).await {
         eprintln!("Web サーバーエラー: {e}");

@@ -10,7 +10,11 @@ use poise::serenity_prelude::Http;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::{AppState, BotGuilds, WebConfig, WebGuild, router};
+use super::{
+    AppState, WebConfig, WebGuild,
+    discord::{ChannelInfo, DiscordInfo, MemberInfo},
+    router,
+};
 use crate::db::{Database, WebSession};
 
 const GUILD: &str = "123";
@@ -21,7 +25,38 @@ fn test_state() -> AppState {
     AppState {
         db,
         http: Arc::new(Http::new("")),
-        bot_guilds: BotGuilds::Fixed(vec![123, 456]),
+        discord: DiscordInfo::Fixed {
+            guilds: vec![123, 456],
+            members: [
+                (
+                    1,
+                    MemberInfo {
+                        name: "アリス".into(),
+                        avatar_url: Some("https://cdn.example/a.png".into()),
+                    },
+                ),
+                (
+                    2,
+                    MemberInfo {
+                        name: "ボブ".into(),
+                        avatar_url: None,
+                    },
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            channels: vec![
+                ChannelInfo {
+                    id: "10".into(),
+                    name: "宿題".into(),
+                },
+                ChannelInfo {
+                    id: "11".into(),
+                    name: "雑談".into(),
+                },
+            ],
+            roles: [(777, "課題通知".to_string())].into_iter().collect(),
+        },
         config: Arc::new(WebConfig {
             addr: "127.0.0.1:0".parse().unwrap(),
             base_url: "http://localhost".into(),
@@ -436,6 +471,413 @@ async fn stats_reports_personal_rate() {
 }
 
 #[tokio::test]
+async fn done_by_lists_member_names() {
+    let state = test_state();
+    let alice = login_as(&state, "1", false).await;
+    let bob = login_as(&state, "2", false).await;
+    let base = format!("/api/guilds/{GUILD}/homework");
+    let (_, hw) = call(
+        &state,
+        "POST",
+        &base,
+        Some(&alice),
+        Some(json!({ "subject": "数学", "title": "p.1", "due": "2999-01-05" })),
+    )
+    .await;
+    let id = hw["id"].as_i64().unwrap();
+    call(
+        &state,
+        "POST",
+        &format!("{base}/{id}/done"),
+        Some(&alice),
+        Some(json!({ "done": true })),
+    )
+    .await;
+    call(
+        &state,
+        "POST",
+        &format!("{base}/{id}/done"),
+        Some(&bob),
+        Some(json!({ "done": true })),
+    )
+    .await;
+    // サーバーにいない人（名前が取れない）
+    state
+        .db
+        .hw_set_done(id, GUILD.into(), "3".into(), true)
+        .await
+        .unwrap();
+
+    let (status, users) = call(
+        &state,
+        "GET",
+        &format!("{base}/{id}/done_by"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let names: Vec<_> = users
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|u| u["name"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(names.len(), 3);
+    assert!(names.contains(&"アリス".to_string()) && names.contains(&"ボブ".to_string()));
+    assert!(names.contains(&"（サーバーにいないユーザー）".to_string()));
+
+    let (status, _) = call(
+        &state,
+        "GET",
+        &format!("{base}/999/done_by"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn settings_can_be_viewed_and_changed() {
+    let state = test_state();
+    let alice = login_as(&state, "1", false).await;
+    let url = format!("/api/guilds/{GUILD}/settings");
+
+    let (status, s) = call(&state, "GET", &url, Some(&alice), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(s["channel_id"], Value::Null);
+    assert_eq!(s["channels"][0], json!({ "id": "10", "name": "宿題" }));
+    assert_eq!(s["remind_before"], 86400);
+    assert_eq!(s["summary_time"], "21:00");
+    assert_eq!(s["default_time"], "08:30");
+    assert_eq!(s["notify_role"], Value::Null);
+    assert_eq!(s["my_dm_remind_before"], Value::Null);
+
+    let (status, s) = call(
+        &state,
+        "PATCH",
+        &url,
+        Some(&alice),
+        Some(json!({
+            "channel_id": "11", "remind_before": 0, "summary_time": "7:30", "default_time": "9時"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(s["channel_id"], "11");
+    assert_eq!(s["remind_before"], Value::Null);
+    assert_eq!(s["summary_time"], "07:30");
+    assert_eq!(s["default_time"], "09:00");
+
+    // 未設定に戻す・まとめ投稿をオフ
+    let (_, s) = call(
+        &state,
+        "PATCH",
+        &url,
+        Some(&alice),
+        Some(json!({ "channel_id": "", "summary_time": "off" })),
+    )
+    .await;
+    assert_eq!(s["channel_id"], Value::Null);
+    assert_eq!(s["summary_time"], Value::Null);
+    assert_eq!(s["default_time"], "09:00");
+
+    // 不正な値
+    for body in [
+        json!({ "channel_id": "999" }),
+        json!({ "remind_before": 123 }),
+        json!({ "summary_time": "夜" }),
+    ] {
+        let (status, _) = call(&state, "PATCH", &url, Some(&alice), Some(body)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+
+    // 通知ロールは名前付きで表示（変更は Discord から）
+    state
+        .db
+        .hw_update_settings(
+            GUILD.into(),
+            crate::models::HwSettingsPatch {
+                notify_role_id: Some(Some("777".into())),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let (_, s) = call(&state, "GET", &url, Some(&alice), None).await;
+    assert_eq!(s["notify_role"], json!({ "id": "777", "name": "課題通知" }));
+
+    // 自分の DM 通知
+    let notify = format!("/api/guilds/{GUILD}/me/notify");
+    let (status, s) = call(
+        &state,
+        "PUT",
+        &notify,
+        Some(&alice),
+        Some(json!({ "remind_before": 3600 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(s["my_dm_remind_before"], 3600);
+    let bob = login_as(&state, "2", false).await;
+    let (_, s) = call(&state, "GET", &url, Some(&bob), None).await;
+    assert_eq!(s["my_dm_remind_before"], Value::Null);
+    let (_, s) = call(
+        &state,
+        "PUT",
+        &notify,
+        Some(&alice),
+        Some(json!({ "remind_before": null })),
+    )
+    .await;
+    assert_eq!(s["my_dm_remind_before"], Value::Null);
+    let (status, _) = call(
+        &state,
+        "PUT",
+        &notify,
+        Some(&alice),
+        Some(json!({ "remind_before": 5 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn repeats_can_be_added_and_removed() {
+    let state = test_state();
+    let alice = login_as(&state, "1", false).await;
+    let bob = login_as(&state, "2", false).await;
+    let url = format!("/api/guilds/{GUILD}/repeats");
+
+    let (status, r) = call(
+        &state,
+        "POST",
+        &url,
+        Some(&alice),
+        Some(json!({
+            "subject": "英語", "title": "単語テストの勉強", "weekday": 0, "time": "8:00"
+        })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(r["time"], "08:00");
+    assert_eq!(r["weekday"], 0);
+    assert!(r["last_due"].as_str().unwrap().ends_with(" 08:00"));
+    let id = r["id"].as_i64().unwrap();
+
+    // 今回の分がすぐに登録される
+    let (_, hw) = call(
+        &state,
+        "GET",
+        &format!("/api/guilds/{GUILD}/homework?scope=upcoming"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(hw.as_array().unwrap().len(), 1);
+    assert_eq!(hw[0]["repeat"], true);
+
+    // 時刻を省略するとサーバーの既定の時刻
+    let (_, r2) = call(
+        &state,
+        "POST",
+        &url,
+        Some(&bob),
+        Some(json!({ "subject": "数学", "title": "プリント", "weekday": 4 })),
+    )
+    .await;
+    assert_eq!(r2["time"], "08:30");
+
+    let (status, _) = call(
+        &state,
+        "POST",
+        &url,
+        Some(&alice),
+        Some(json!({ "subject": "x", "title": "y", "weekday": 7 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let (_, list) = call(&state, "GET", &url, Some(&alice), None).await;
+    assert_eq!(list.as_array().unwrap().len(), 2);
+    assert_eq!(list[0]["can_delete"], true);
+    assert_eq!(list[1]["can_delete"], false);
+
+    // 他人の設定は止められない（管理権限があれば可）
+    let (status, _) = call(&state, "DELETE", &format!("{url}/{id}"), Some(&bob), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = call(&state, "DELETE", &format!("{url}/{id}"), Some(&alice), None).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, list) = call(&state, "GET", &url, Some(&alice), None).await;
+    assert_eq!(list.as_array().unwrap().len(), 1);
+    // 登録済みの宿題は残る
+    let (_, hw) = call(
+        &state,
+        "GET",
+        &format!("/api/guilds/{GUILD}/homework?scope=upcoming"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(hw.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn search_finds_homework_and_tasks() {
+    let state = test_state();
+    let alice = login_as(&state, "1", false).await;
+    let hw = format!("/api/guilds/{GUILD}/homework");
+    call(
+        &state,
+        "POST",
+        &hw,
+        Some(&alice),
+        Some(json!({ "subject": "数学", "title": "プリント", "due": "2999-01-05" })),
+    )
+    .await;
+    call(&state, "POST", &hw, Some(&alice), Some(json!({ "subject": "英語", "title": "単語", "due": "2999-01-06", "memo": "数学の後でやる" }))).await;
+    call(
+        &state,
+        "POST",
+        &hw,
+        Some(&alice),
+        Some(
+            json!({ "kind": "exam", "subject": "数学", "title": "小テスト", "due": "2000-01-01" }),
+        ),
+    )
+    .await;
+    call(
+        &state,
+        "POST",
+        &format!("/api/guilds/{GUILD}/tasks"),
+        Some(&alice),
+        Some(json!({ "title": "数学の先生に提出" })),
+    )
+    .await;
+
+    let search = |q: &str| format!("/api/guilds/{GUILD}/search?q={q}");
+    let (status, r) = call(
+        &state,
+        "GET",
+        &search("%E6%95%B0%E5%AD%A6"),
+        Some(&alice),
+        None,
+    )
+    .await; // 数学
+    assert_eq!(status, StatusCode::OK);
+    // 科目・メモ・過去のテストも含む（期限の新しい順）
+    let titles: Vec<_> = r["homework"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["単語", "プリント", "小テスト"]);
+    assert_eq!(r["tasks"][0]["title"], "数学の先生に提出");
+
+    let (_, r) = call(&state, "GET", &search("%20%20"), Some(&alice), None).await;
+    assert_eq!(r, json!({ "homework": [], "tasks": [] }));
+    let (_, r) = call(&state, "GET", &search("zzz"), Some(&alice), None).await;
+    assert_eq!(r, json!({ "homework": [], "tasks": [] }));
+    let (status, _) = call(
+        &state,
+        "GET",
+        "/api/guilds/999/search?q=a",
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn class_rate_uses_participants() {
+    let state = test_state();
+    let alice = login_as(&state, "1", false).await;
+    let bob = login_as(&state, "2", false).await;
+    let hw = format!("/api/guilds/{GUILD}/homework");
+    let (_, a) = call(
+        &state,
+        "POST",
+        &hw,
+        Some(&alice),
+        Some(json!({ "subject": "数学", "title": "a", "due": "2999-01-05" })),
+    )
+    .await;
+    let (_, b) = call(
+        &state,
+        "POST",
+        &hw,
+        Some(&alice),
+        Some(json!({ "subject": "英語", "title": "b", "due": "2999-01-06" })),
+    )
+    .await;
+    let (a, b) = (a["id"].as_i64().unwrap(), b["id"].as_i64().unwrap());
+
+    // まだ誰も完了を記録していない
+    let (_, list) = call(
+        &state,
+        "GET",
+        &format!("{hw}?scope=upcoming"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(list[0]["class_size"], 0);
+
+    call(
+        &state,
+        "POST",
+        &format!("{hw}/{a}/done"),
+        Some(&alice),
+        Some(json!({ "done": true })),
+    )
+    .await;
+    call(
+        &state,
+        "POST",
+        &format!("{hw}/{b}/done"),
+        Some(&alice),
+        Some(json!({ "done": true })),
+    )
+    .await;
+    let (_, done) = call(
+        &state,
+        "POST",
+        &format!("{hw}/{a}/done"),
+        Some(&bob),
+        Some(json!({ "done": true })),
+    )
+    .await;
+    assert_eq!(done["class_size"], 2);
+    assert_eq!(done["done_count"], 2);
+
+    let (_, list) = call(
+        &state,
+        "GET",
+        &format!("{hw}?scope=upcoming"),
+        Some(&bob),
+        None,
+    )
+    .await;
+    assert_eq!(list[1]["done_count"], 1);
+    assert_eq!(list[1]["class_size"], 2);
+
+    // アリス 2/2・ボブ 1/2 → 75%
+    let (_, s) = call(
+        &state,
+        "GET",
+        &format!("/api/guilds/{GUILD}/stats?period=all"),
+        Some(&bob),
+        None,
+    )
+    .await;
+    assert_eq!(s["class"], json!({ "average": 75, "participants": 2 }));
+    assert_eq!(s["overall"], json!({ "done": 1, "total": 2 }));
+}
+
+#[tokio::test]
 async fn task_flow_add_status_edit_delete() {
     let state = test_state();
     let cookie = login_as(&state, "1", false).await;
@@ -598,7 +1040,7 @@ async fn serve_demo() {
             "国語",
             "読書感想文",
             day(5, "08:30"),
-            Some("原稿用紙3枚"),
+            Some("原稿用紙3枚。提出はこちら: https://forms.example.com/hw?id=3。"),
         ),
         ("homework", "理科", "実験レポート", day(-1, "17:00"), None),
         (
@@ -645,6 +1087,9 @@ async fn serve_demo() {
         Some(json!({ "title": "部室の掃除", "priority": "Low" })),
     )
     .await;
+
+    call(&state, "POST", &format!("/api/guilds/{GUILD}/repeats"), Some(&cookie),
+        Some(json!({ "subject": "英語", "title": "単語テストの勉強", "weekday": 0, "time": "08:00" }))).await;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:18080")
         .await

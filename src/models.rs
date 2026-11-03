@@ -264,6 +264,8 @@ pub struct HwQuery {
     /// 種類（None ならすべて）
     pub kind: Option<HwKind>,
     pub subject: Option<String>,
+    /// 科目・内容・メモに含まれるキーワード
+    pub keyword: Option<String>,
     /// この期限以降（正規化フォーマット、含む）
     pub due_from: Option<String>,
     /// この期限より前（正規化フォーマット、含まない）
@@ -298,6 +300,15 @@ impl HwSettings {
     pub const DEFAULT_REMIND_BEFORE: i64 = 24 * 3600;
     pub const DEFAULT_TIME: &'static str = "08:30";
     pub const DEFAULT_SUMMARY_TIME: &'static str = "21:00";
+    /// 期限前の通知・DM 通知で選べるタイミング（秒）
+    pub const REMIND_CHOICES: [i64; 6] = [
+        3600,
+        3 * 3600,
+        6 * 3600,
+        24 * 3600,
+        2 * 24 * 3600,
+        7 * 24 * 3600,
+    ];
 
     pub fn default_for(guild_id: String) -> Self {
         Self {
@@ -320,7 +331,8 @@ impl HwSettings {
 /// `/hw settings` で変更する項目（None は変更しない）
 #[derive(Debug, Default)]
 pub struct HwSettingsPatch {
-    pub channel_id: Option<String>,
+    /// Some(None) で通知チャンネルを未設定に戻す
+    pub channel_id: Option<Option<String>>,
     pub remind_before: Option<Option<i64>>,
     pub summary_time: Option<Option<String>>,
     pub default_time: Option<String>,

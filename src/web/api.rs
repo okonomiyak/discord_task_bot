@@ -2,22 +2,22 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use poise::serenity_prelude::{ChannelId, CreateMessage};
 use serde::{Deserialize, Serialize};
 
-use super::{ApiError, AppState, Auth, WebGuild};
+use super::{ApiError, AppState, Auth, WebGuild, discord::ChannelInfo};
 use crate::{
     commands::{delete_event, done_buttons, sync_event},
     db::{HwEdit, TaskEdit},
     hw_notify::{role_allowed_mentions, with_role_mention},
     models::{
-        Homework, HwKind, HwQuery, HwSettings, NewHomework, Priority, Task, TaskQuery, TaskSort,
-        TaskStatus,
+        Homework, HwKind, HwQuery, HwRepeat, HwSettings, HwSettingsPatch, NewHomework, Priority,
+        Task, TaskQuery, TaskSort, TaskStatus,
     },
-    stats::{self as hw_stats, HwStats, StatsPeriod},
-    time::{DUE_FORMAT, due_to_utc, local_now, parse_due_input, parse_time},
+    stats::{self as hw_stats, ClassStats, HwStats, StatsPeriod},
+    time::{DUE_FORMAT, due_to_utc, local_now, next_weekly, parse_due_input, parse_time, timezone},
 };
 
 type ApiResult<T> = Result<Json<T>, ApiError>;
@@ -30,6 +30,7 @@ pub fn router() -> Router<AppState> {
         .route("/me", get(me))
         .route("/guilds/{gid}/subjects", get(subjects))
         .route("/guilds/{gid}/stats", get(stats))
+        .route("/guilds/{gid}/search", get(search))
         .route(
             "/guilds/{gid}/homework",
             get(list_homework).post(create_homework),
@@ -39,6 +40,17 @@ pub fn router() -> Router<AppState> {
             patch(edit_homework).delete(delete_homework),
         )
         .route("/guilds/{gid}/homework/{id}/done", post(set_done))
+        .route("/guilds/{gid}/homework/{id}/done_by", get(done_by))
+        .route(
+            "/guilds/{gid}/settings",
+            get(get_settings).patch(update_settings),
+        )
+        .route("/guilds/{gid}/me/notify", put(set_my_notify))
+        .route(
+            "/guilds/{gid}/repeats",
+            get(list_repeats).post(create_repeat),
+        )
+        .route("/guilds/{gid}/repeats/{id}", delete(remove_repeat))
         .route("/guilds/{gid}/tasks", get(list_tasks).post(create_task))
         .route(
             "/guilds/{gid}/tasks/{id}",
@@ -184,6 +196,7 @@ struct StatsDto {
     label: String,
     #[serde(flatten)]
     stats: HwStats,
+    class: ClassStats,
 }
 
 /// ログインしている人の宿題の達成率
@@ -201,7 +214,7 @@ async fn stats(
     let list = state
         .db
         .hw_list(
-            gid,
+            gid.clone(),
             HwQuery {
                 kind: Some(HwKind::Homework),
                 due_from,
@@ -210,9 +223,11 @@ async fn stats(
             },
         )
         .await?;
+    let participants = state.db.hw_participants(gid).await?;
     Ok(Json(StatsDto {
         label,
         stats: hw_stats::compute(&list, &auth.user_id, now),
+        class: hw_stats::class_average(&list, &participants),
     }))
 }
 
@@ -230,14 +245,17 @@ struct HwDto {
     due: String,
     due_unix: i64,
     done_count: usize,
+    /// クラスの人数（宿題の完了を記録したことがある人）。done_count / class_size がクラスの完了率
+    class_size: usize,
     done_by_me: bool,
     created_by: String,
     repeat: bool,
     can_delete: bool,
 }
 
-fn hw_dto(hw: Homework, auth: &Auth, guild: &WebGuild) -> HwDto {
+fn hw_dto(hw: Homework, auth: &Auth, guild: &WebGuild, class_size: usize) -> HwDto {
     HwDto {
+        class_size,
         id: hw.id,
         kind: hw.kind.as_str(),
         due_unix: due_unix(&hw.due_date),
@@ -309,10 +327,11 @@ async fn list_homework(
         },
         s => return Err(ApiError::bad_request(format!("scope `{s}` は不正です"))),
     };
+    let class_size = state.db.hw_participants(gid.clone()).await?.len();
     let list = state.db.hw_list(gid, query).await?;
     Ok(Json(
         list.into_iter()
-            .map(|hw| hw_dto(hw, &auth, &guild))
+            .map(|hw| hw_dto(hw, &auth, &guild, class_size))
             .collect(),
     ))
 }
@@ -383,7 +402,8 @@ async fn create_homework(
     } else {
         StatusCode::OK
     };
-    Ok((status, Json(hw_dto(hw, &auth, &guild))))
+    let class_size = state.db.hw_participants(hw.guild_id.clone()).await?.len();
+    Ok((status, Json(hw_dto(hw, &auth, &guild, class_size))))
 }
 
 async fn edit_homework(
@@ -416,7 +436,8 @@ async fn edit_homework(
         .hw_edit(id, gid, edit)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("#{id} が見つかりません")))?;
-    Ok(Json(hw_dto(hw, &auth, &guild)))
+    let class_size = state.db.hw_participants(hw.guild_id.clone()).await?.len();
+    Ok(Json(hw_dto(hw, &auth, &guild, class_size)))
 }
 
 async fn delete_homework(
@@ -468,7 +489,414 @@ async fn set_done(
         .hw_get(id, gid)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("#{id} が見つかりません")))?;
-    Ok(Json(hw_dto(hw, &auth, &guild)))
+    let class_size = state.db.hw_participants(hw.guild_id.clone()).await?.len();
+    Ok(Json(hw_dto(hw, &auth, &guild, class_size)))
+}
+
+#[derive(Serialize)]
+struct DoneUserDto {
+    id: String,
+    name: String,
+    avatar_url: Option<String>,
+}
+
+/// 宿題を完了した人（サーバーでの表示名とアイコン）
+async fn done_by(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path((gid, id)): Path<(String, i64)>,
+) -> ApiResult<Vec<DoneUserDto>> {
+    auth.guild(&state, &gid)?;
+    let hw = state
+        .db
+        .hw_get(id, gid.clone())
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("#{id} が見つかりません")))?;
+    let mut users = Vec::with_capacity(hw.done_by.len());
+    for user_id in hw.done_by {
+        let info = state.discord.member(&gid, &user_id).await;
+        users.push(DoneUserDto {
+            name: info
+                .as_ref()
+                .map(|m| m.name.clone())
+                .unwrap_or_else(|| "（サーバーにいないユーザー）".to_string()),
+            avatar_url: info.and_then(|m| m.avatar_url),
+            id: user_id,
+        });
+    }
+    Ok(Json(users))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 検索
+// ────────────────────────────────────────────────────────────────────────────
+
+/// 検索結果の上限（種類ごと）
+const SEARCH_LIMIT: usize = 50;
+
+#[derive(Deserialize)]
+struct SearchQuery {
+    q: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SearchDto {
+    homework: Vec<HwDto>,
+    tasks: Vec<TaskDto>,
+}
+
+/// 宿題・テスト（科目・内容・メモ）とタスク（タイトル・説明）をキーワードで探す。
+/// 過去のものも含め、宿題は期限の新しい順・タスクは期限の近い順で返す
+async fn search(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(gid): Path<String>,
+    Query(q): Query<SearchQuery>,
+) -> ApiResult<SearchDto> {
+    let guild = auth.guild(&state, &gid)?.clone();
+    let keyword = q.q.as_deref().map(str::trim).unwrap_or("");
+    if keyword.is_empty() {
+        return Ok(Json(SearchDto {
+            homework: vec![],
+            tasks: vec![],
+        }));
+    }
+    if keyword.chars().count() > 100 {
+        return Err(ApiError::bad_request(
+            "キーワードは100文字以内にしてください",
+        ));
+    }
+
+    let class_size = state.db.hw_participants(gid.clone()).await?.len();
+    let homework = state
+        .db
+        .hw_list(
+            gid.clone(),
+            HwQuery {
+                keyword: Some(keyword.to_string()),
+                newest_first: true,
+                ..Default::default()
+            },
+        )
+        .await?;
+    let tasks = state
+        .db
+        .list_tasks(
+            gid,
+            TaskQuery {
+                keyword: Some(keyword.to_string()),
+                sort: TaskSort::DueDate,
+                ..Default::default()
+            },
+        )
+        .await?;
+    Ok(Json(SearchDto {
+        homework: homework
+            .into_iter()
+            .take(SEARCH_LIMIT)
+            .map(|hw| hw_dto(hw, &auth, &guild, class_size))
+            .collect(),
+        tasks: tasks.into_iter().take(SEARCH_LIMIT).map(task_dto).collect(),
+    }))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 設定
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct RoleDto {
+    id: String,
+    name: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SettingsDto {
+    channel_id: Option<String>,
+    /// 投稿先に選べるチャンネル（取得できなければ空）
+    channels: Vec<ChannelInfo>,
+    /// 期限前のチャンネル通知（秒、None でオフ）
+    remind_before: Option<i64>,
+    remind_choices: Vec<i64>,
+    /// 毎日のまとめ投稿の時刻（None でオフ）
+    summary_time: Option<String>,
+    default_time: String,
+    notify_role: Option<RoleDto>,
+    /// 自分への DM 通知（秒、None でオフ）
+    my_dm_remind_before: Option<i64>,
+    timezone: String,
+}
+
+async fn settings_dto(state: &AppState, gid: &str, user_id: &str) -> Result<SettingsDto, ApiError> {
+    let s = state.db.hw_settings(gid.to_string()).await?;
+    let notify_role = match &s.notify_role_id {
+        Some(id) => Some(RoleDto {
+            id: id.clone(),
+            name: state.discord.role_name(gid, id).await,
+        }),
+        None => None,
+    };
+    Ok(SettingsDto {
+        channels: state.discord.text_channels(gid).await,
+        channel_id: s.channel_id,
+        remind_before: s.remind_before,
+        remind_choices: HwSettings::REMIND_CHOICES.to_vec(),
+        summary_time: s.summary_time,
+        default_time: s.default_time,
+        notify_role,
+        my_dm_remind_before: state
+            .db
+            .hw_get_dm(gid.to_string(), user_id.to_string())
+            .await?,
+        timezone: timezone().to_string(),
+    })
+}
+
+async fn get_settings(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(gid): Path<String>,
+) -> ApiResult<SettingsDto> {
+    auth.guild(&state, &gid)?;
+    Ok(Json(settings_dto(&state, &gid, &auth.user_id).await?))
+}
+
+/// 通知タイミングの入力（null / 0 でオフ、それ以外は選択肢のどれか）
+fn parse_remind(value: Option<i64>) -> Result<Option<i64>, ApiError> {
+    match value {
+        None | Some(0) => Ok(None),
+        Some(secs) if HwSettings::REMIND_CHOICES.contains(&secs) => Ok(Some(secs)),
+        Some(secs) => Err(ApiError::bad_request(format!(
+            "通知のタイミング {secs} 秒は選べません"
+        ))),
+    }
+}
+
+fn parse_hhmm(input: &str, name: &str) -> Result<String, ApiError> {
+    parse_time(input)
+        .map(|t| t.format("%H:%M").to_string())
+        .ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "{name}「{input}」を解釈できませんでした（例: 21:00）"
+            ))
+        })
+}
+
+#[derive(Deserialize)]
+struct SettingsInput {
+    /// 空文字で未設定に戻す
+    channel_id: Option<String>,
+    /// 0 でオフ
+    remind_before: Option<i64>,
+    /// "off" でオフ
+    summary_time: Option<String>,
+    default_time: Option<String>,
+}
+
+/// サーバーの設定を変更する（Discord の /hw settings と同じく誰でも変更できる）
+async fn update_settings(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(gid): Path<String>,
+    Json(input): Json<SettingsInput>,
+) -> ApiResult<SettingsDto> {
+    auth.guild(&state, &gid)?;
+    let channel_id = match input.channel_id.as_deref().map(str::trim) {
+        None => None,
+        Some("") => Some(None),
+        Some(id) => {
+            let channels = state.discord.text_channels(&gid).await;
+            if !channels.iter().any(|c| c.id == id) {
+                return Err(ApiError::bad_request(
+                    "そのチャンネルには投稿できません（一覧から選んでください）",
+                ));
+            }
+            Some(Some(id.to_string()))
+        }
+    };
+    let remind_before = match input.remind_before {
+        None => None,
+        Some(v) => Some(parse_remind(Some(v))?),
+    };
+    let summary_time = match input.summary_time.as_deref().map(str::trim) {
+        None => None,
+        Some("off" | "") => Some(None),
+        Some(t) => Some(Some(parse_hhmm(t, "まとめ投稿の時刻")?)),
+    };
+    let default_time = match input.default_time.as_deref() {
+        None => None,
+        Some(t) => Some(parse_hhmm(t, "時刻")?),
+    };
+    state
+        .db
+        .hw_update_settings(
+            gid.clone(),
+            HwSettingsPatch {
+                channel_id,
+                remind_before,
+                summary_time,
+                default_time,
+                notify_role_id: None,
+            },
+        )
+        .await?;
+    Ok(Json(settings_dto(&state, &gid, &auth.user_id).await?))
+}
+
+#[derive(Deserialize)]
+struct NotifyInput {
+    /// null / 0 でオフ
+    remind_before: Option<i64>,
+}
+
+/// 自分への DM 通知（/hw notify と同じ）
+async fn set_my_notify(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(gid): Path<String>,
+    Json(input): Json<NotifyInput>,
+) -> ApiResult<SettingsDto> {
+    auth.guild(&state, &gid)?;
+    let secs = parse_remind(input.remind_before)?;
+    state
+        .db
+        .hw_set_dm(gid.clone(), auth.user_id.clone(), secs)
+        .await?;
+    Ok(Json(settings_dto(&state, &gid, &auth.user_id).await?))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// 毎週の宿題
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct RepeatDto {
+    id: i64,
+    subject: String,
+    title: String,
+    memo: Option<String>,
+    /// 0 = 月曜 〜 6 = 日曜
+    weekday: u32,
+    time: String,
+    created_by: String,
+    can_delete: bool,
+    /// 最後に自動登録した宿題の期限
+    last_due: Option<String>,
+}
+
+fn repeat_dto(r: HwRepeat, auth: &Auth, guild: &WebGuild) -> RepeatDto {
+    RepeatDto {
+        can_delete: r.created_by == auth.user_id || guild.can_manage,
+        id: r.id,
+        subject: r.subject,
+        title: r.title,
+        memo: r.description,
+        weekday: r.weekday,
+        time: r.time,
+        created_by: r.created_by,
+        last_due: r.last_due,
+    }
+}
+
+async fn list_repeats(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(gid): Path<String>,
+) -> ApiResult<Vec<RepeatDto>> {
+    let guild = auth.guild(&state, &gid)?.clone();
+    let list = state.db.hw_repeats(Some(gid)).await?;
+    Ok(Json(
+        list.into_iter()
+            .map(|r| repeat_dto(r, &auth, &guild))
+            .collect(),
+    ))
+}
+
+#[derive(Deserialize)]
+struct RepeatInput {
+    subject: Option<String>,
+    title: Option<String>,
+    weekday: Option<u32>,
+    /// 省略時はサーバーの「時刻を省略したときの期限」
+    time: Option<String>,
+    memo: Option<String>,
+}
+
+/// 毎週の宿題を登録し、今回の分もすぐに登録する（/hw repeat add と同じ）
+async fn create_repeat(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(gid): Path<String>,
+    Json(input): Json<RepeatInput>,
+) -> Result<(StatusCode, Json<RepeatDto>), ApiError> {
+    let guild = auth.guild(&state, &gid)?.clone();
+    let subject = required(input.subject.as_deref().unwrap_or(""), "科目", 30)?;
+    let title = required(input.title.as_deref().unwrap_or(""), "内容", 100)?;
+    let memo = optional(input.memo, "メモ", 1000)?;
+    let weekday = input
+        .weekday
+        .filter(|w| *w < 7)
+        .ok_or_else(|| ApiError::bad_request("曜日を選んでください"))?;
+    let time = match input
+        .time
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+    {
+        Some(t) => parse_hhmm(t, "時刻")?,
+        None => state.db.hw_settings(gid.clone()).await?.default_time,
+    };
+    let channel = state.db.announce_channel(gid.clone()).await?;
+
+    let repeat = HwRepeat {
+        id: 0,
+        guild_id: gid.clone(),
+        channel_id: channel.unwrap_or_else(|| "0".to_string()),
+        created_by: auth.user_id.clone(),
+        subject,
+        title,
+        description: memo,
+        weekday,
+        time: time.clone(),
+        last_due: None,
+    };
+    let id = state.db.hw_repeat_add(repeat).await?;
+    if let Some(t) = parse_time(&time) {
+        let first = next_weekly(local_now(), weekday, t)
+            .format(DUE_FORMAT)
+            .to_string();
+        state.db.hw_repeat_generate(id, first).await?;
+    }
+    let created = state
+        .db
+        .hw_repeat_get(id, gid)
+        .await?
+        .ok_or_else(|| ApiError::not_found("登録した毎週の宿題が見つかりません"))?;
+    Ok((
+        StatusCode::CREATED,
+        Json(repeat_dto(created, &auth, &guild)),
+    ))
+}
+
+/// 毎週の宿題を止める（登録済みの宿題は残る。登録した人か管理権限がある人のみ）
+async fn remove_repeat(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path((gid, id)): Path<(String, i64)>,
+) -> Result<StatusCode, ApiError> {
+    let guild = auth.guild(&state, &gid)?.clone();
+    let r = state
+        .db
+        .hw_repeat_get(id, gid.clone())
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("毎週の宿題 #{id} が見つかりません")))?;
+    if r.created_by != auth.user_id && !guild.can_manage {
+        return Err(ApiError::forbidden(
+            "止められるのは登録した人か、メッセージの管理権限がある人だけです",
+        ));
+    }
+    state.db.hw_repeat_delete(id, gid).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ────────────────────────────────────────────────────────────────────────────
