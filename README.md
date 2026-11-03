@@ -147,6 +147,46 @@ git pull && cargo build --release && sudo systemctl restart discord-task-bot
 
 `.env` と `tasks.db` は `WorkingDirectory` から読み書きされます。
 
+#### GitHub Actions で自動デプロイする
+
+master に push（PR をマージ）して CI が通ると、自宅 PC の
+[セルフホストランナー](https://docs.github.com/ja/actions/hosting-your-own-runners)が
+`scripts/deploy.sh` を実行し、ボットを更新して再起動します（`.github/workflows/deploy.yml`）。
+
+- `git pull`（早送りのみ）→ `cargo build --release --locked` → `systemctl restart` → 20 秒間動いているか確認
+- ビルドに失敗したら再起動しません（前のバージョンのまま動き続けます）
+- 再起動後に落ちたら、前のコミットとバイナリに戻して再起動し、ジョブを失敗にします（ログに journalctl を出します）
+- Actions 画面の **Deploy → Run workflow** から手動でも実行できます
+
+設定（初回だけ）:
+
+1. **ランナーを登録する**: GitHub のリポジトリの **Settings → Actions → Runners → New self-hosted runner** で
+   Linux / x64 を選び、表示されるコマンドを自宅 PC で実行します。`config.sh` には `--labels task-bot` を付けます。
+   ```bash
+   mkdir ~/actions-runner && cd ~/actions-runner
+   # 画面に出る curl / tar を実行してから:
+   ./config.sh --url https://github.com/<owner>/discord_task_bot --token <画面のトークン> --labels task-bot
+   sudo ./svc.sh install "$(whoami)"   # サービスとして常駐させる
+   sudo ./svc.sh start
+   ```
+   root で動かす場合は `config.sh` の前に `export RUNNER_ALLOW_RUNASROOT=1` が必要です。
+   root 以外で動かす場合は、そのユーザーがボットのディレクトリに書き込めて、
+   `sudo -n systemctl restart <サービス名>`（と `is-active` / `reset-failed`、`journalctl`）を
+   パスワードなしで実行できるようにしてください。
+2. **変数を設定する**: **Settings → Secrets and variables → Actions → Variables** に追加します。
+   | 名前 | 例 | 説明 |
+   |---|---|---|
+   | `BOT_DIR` | `/root/discord_task_bot` | ボットが動いているディレクトリ（必須。未設定のあいだはデプロイしません） |
+   | `BOT_SERVICE` | `task-bot` | systemd のサービス名（省略時は `task-bot`） |
+3. `BOT_DIR` は **master ブランチ**のチェックアウトにして、追跡中のファイルを直接書き換えないでください
+   （変更があるとデプロイは止まります。`.env` と `tasks.db` は追跡対象外なので大丈夫です）。
+
+> **公開リポジトリの場合の注意**: セルフホストランナーは、PR のワークフローからも使われる可能性があります。
+> **Settings → Actions → General → Approval for running fork pull request workflows from contributors** を
+> **Require approval for all external contributors** にして、知らない人の PR のワークフローが
+> 承認なしで動かないようにしてください（このリポジトリのワークフローは PR ではランナーを使いません）。
+> 心配ならリポジトリを非公開にするのが確実です。
+
 ### Web ダッシュボードを有効にする
 
 1. [Discord Developer Portal](https://discord.com/developers/applications) でボットのアプリを開き、**OAuth2** を開く

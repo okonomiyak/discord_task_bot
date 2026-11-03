@@ -1,0 +1,42 @@
+name: Deploy
+
+# master への push で CI が成功したら、自宅 PC のセルフホストランナーでボットを更新する。
+# Actions 画面の「Run workflow」から手動でも実行できる（その時点の master を入れ直して再起動する）。
+# 設定方法は README の「自動デプロイ」を参照。
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    # フォークではランナーがないので動かさない。CI は master への push で成功したときだけ
+    if: >-
+      github.repository_owner == 'okonomiyak' &&
+      vars.BOT_DIR != '' &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/master') ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'))
+    runs-on: [self-hosted, linux, task-bot]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          sparse-checkout: scripts
+      - name: Deploy
+        run: scripts/deploy.sh "$BOT_DIR" "$TARGET_SHA" "$BOT_SERVICE"
+        env:
+          BOT_DIR: ${{ vars.BOT_DIR }}
+          BOT_SERVICE: ${{ vars.BOT_SERVICE || 'task-bot' }}
+          # 手動実行のときは空にして、その時点の origin/master を入れる
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
