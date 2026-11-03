@@ -111,21 +111,37 @@ cargo run --release
 [Unit]
 Description=Discord Task Bot
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 WorkingDirectory=/path/to/discord_task_bot
+# ビルド済みのボットを直接起動する（systemd からは cargo が見えないことが多いので、ビルドはしない）
 ExecStart=/path/to/discord_task_bot/target/release/discord_task_bot
 Restart=on-failure
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 ```
 
 ```bash
-cargo build --release
+cargo build --release                       # ログインしたターミナルでビルド
+sudo systemctl daemon-reload
 sudo systemctl enable --now discord-task-bot
-journalctl -u discord-task-bot -f   # ログ確認
+journalctl -u discord-task-bot -f           # ログ確認
 ```
+
+更新するとき:
+
+```bash
+git pull && cargo build --release && sudo systemctl restart discord-task-bot
+```
+
+`ExecStart` に `start.sh` を指定することもできます。その場合は `~/.cargo/bin` の cargo を探してビルドし、
+ビルドできなければビルド済みのボットをそのまま起動します。
+
+起動に何度も失敗して「start request repeated too quickly」で止まったときは、原因を直してから
+`sudo systemctl reset-failed discord-task-bot && sudo systemctl start discord-task-bot` で再開できます。
 
 `.env` と `tasks.db` は `WorkingDirectory` から読み書きされます。
 
