@@ -139,7 +139,8 @@
 
   .stats { background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 14px; margin-bottom: 8px; box-shadow: var(--shadow); }
   .stats-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-  .stats-head .label { font-size: 13px; font-weight: 700; color: var(--muted); }
+  /* 「〇〇の達成率」は必ず1行を使い、期間の切り替えは次の行に置く */
+  .stats-head .label { flex-basis: 100%; font-size: 13px; font-weight: 700; color: var(--muted); }
   .stats .seg { padding: 2px; }
   .stats .seg button { padding: 3px 10px; font-size: 13px; white-space: nowrap; }
   .stats-main { display: flex; align-items: baseline; gap: 10px; margin: 8px 0 6px; }
