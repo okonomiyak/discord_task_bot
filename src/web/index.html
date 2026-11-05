@@ -750,8 +750,10 @@ function viewHelp(v) {
         ["/hw role setup ・ remove", "課題通知ロール（ロールの管理権限が必要）"],
         ["/task add ・ list ・ search ・ view", "タスクの登録・一覧・検索・詳細"],
         ["/task status ・ assign ・ edit ・ delete", "ステータス変更・担当者・編集・削除"],
+        ["/web", "このサイトのリンクを表示（public:true でみんなに見せる）"],
         ["/help", "コマンド一覧を Discord に表示"],
-      ])),
+      ]),
+      el("p", { class: "hint" }, "登録・通知・まとめ投稿・一覧のメッセージにある「Web で開く」ボタンからも、このサイトのそのサーバーの画面に直接来られます。")),
   );
 }
 
@@ -1012,14 +1014,34 @@ $("#logout").addEventListener("click", async () => { await fetch("/logout", { me
 WIDE.addEventListener("change", () => { if (state.me && state.tab === "calendar") render(); });
 window.addEventListener("focus", () => { if (state.me && !$("#editor").open) render(); });
 
+// Discord の「Web で開く」ボタンから来たとき（/?guild=…&tab=…）は、そのサーバーと画面を開く。
+// ログインすると URL の指定が消えるので、ログインが終わるまで sessionStorage に残しておく
+const LINK_TABS = ["todo", "homework", "exam", "tasks", "calendar", "settings", "help"];
+function takeLink() {
+  const q = new URLSearchParams(location.search);
+  if (q.has("guild") || q.has("tab")) {
+    const link = { guild: q.get("guild") || "", tab: q.get("tab") || "" };
+    try { sessionStorage.setItem("link", JSON.stringify(link)); } catch {}
+    history.replaceState(null, "", location.pathname);
+    return link;
+  }
+  try { return JSON.parse(sessionStorage.getItem("link") || "null"); } catch { return null; }
+}
+
 (async function init() {
   quickDates();
+  const link = takeLink();
   try { state.me = await api("/api/me"); } catch { return; }
+  try { sessionStorage.removeItem("link"); } catch {}
   $("#login").hidden = true; $("#app").hidden = false;
   if (state.me.avatar_url) $("#avatar").src = state.me.avatar_url; else $("#avatar").hidden = true;
   $("#avatar").title = state.me.name;
   $("#me-name").textContent = state.me.name;
   const guilds = state.me.guilds;
+  if (link) {
+    if (guilds.some((gd) => gd.id === link.guild)) { state.guild = link.guild; localStorage.setItem("guild", state.guild); }
+    if (LINK_TABS.includes(link.tab)) { state.tab = link.tab; localStorage.setItem("tab", state.tab); }
+  }
   $("#guild").replaceChildren(...guilds.map((gd) => el("option", { value: gd.id }, gd.name)));
   if (!guilds.some((gd) => gd.id === state.guild)) state.guild = guilds[0]?.id || "";
   $("#guild").value = state.guild;

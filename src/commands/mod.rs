@@ -5,7 +5,7 @@ use poise::serenity_prelude::{
 
 use crate::{
     Context, Error,
-    models::HwSettings,
+    models::{HwKind, HwSettings},
     time::{DUE_FORMAT, local_now, parse_due_input, parse_time, timezone},
 };
 
@@ -172,11 +172,13 @@ fn build_pages<T>(
         .collect()
 }
 
-/// Embed のページを送信する。複数ページならボタンでページ送りできるようにする
+/// Embed のページを送信する。複数ページならボタンでページ送りできるようにする。
+/// link（「Web で開く」ボタン）はページ送りの横に置き、ページ送りが終わっても残す
 async fn send_paginated(
     ctx: Context<'_>,
     pages: Vec<CreateEmbed>,
     ephemeral: bool,
+    link: Option<CreateButton>,
 ) -> Result<(), Error> {
     let reply = |page: usize| {
         poise::CreateReply::default()
@@ -185,7 +187,7 @@ async fn send_paginated(
     };
 
     if pages.len() <= 1 {
-        ctx.send(reply(0)).await?;
+        ctx.send(reply(0).components(link_row(link))).await?;
         return Ok(());
     }
 
@@ -193,12 +195,14 @@ async fn send_paginated(
     let prev_id = format!("{ctx_id}:prev");
     let next_id = format!("{ctx_id}:next");
     let buttons = |page: usize| {
-        vec![CreateActionRow::Buttons(vec![
+        let mut row = vec![
             CreateButton::new(&prev_id).emoji('◀').disabled(page == 0),
             CreateButton::new(&next_id)
                 .emoji('▶')
                 .disabled(page + 1 >= pages.len()),
-        ])]
+        ];
+        row.extend(link.clone());
+        vec![CreateActionRow::Buttons(row)]
     };
 
     let mut page = 0;
@@ -234,7 +238,10 @@ async fn send_paginated(
     }
 
     // タイムアウトしたらボタンを消す（インタラクションの有効期限切れで失敗しても無視する）
-    if let Err(e) = handle.edit(ctx, reply(page).components(vec![])).await {
+    if let Err(e) = handle
+        .edit(ctx, reply(page).components(link_row(link.clone())))
+        .await
+    {
         eprintln!("ページ送りボタンの削除に失敗: {:?}", e);
     }
     Ok(())
@@ -242,6 +249,109 @@ async fn send_paginated(
 
 mod hw;
 mod task;
+
+// ────────────────────────────────────────────────────────────────────────────
+// Web ダッシュボードへのリンク
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Web ダッシュボードで最初に開く画面
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum WebTab {
+    Todo,
+    Homework,
+    Exam,
+    Tasks,
+    Settings,
+}
+
+impl WebTab {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Todo => "todo",
+            Self::Homework => "homework",
+            Self::Exam => "exam",
+            Self::Tasks => "tasks",
+            Self::Settings => "settings",
+        }
+    }
+}
+
+impl From<HwKind> for WebTab {
+    fn from(kind: HwKind) -> Self {
+        match kind {
+            HwKind::Homework => Self::Homework,
+            HwKind::Exam => Self::Exam,
+        }
+    }
+}
+
+/// サーバーと画面を指定したダッシュボードの URL（未ログインならログイン後にその画面を開く）
+pub fn dashboard_url(base: &str, guild_id: Option<&str>, tab: WebTab) -> String {
+    let base = base.trim_end_matches('/');
+    match guild_id {
+        Some(g) => format!("{base}/?guild={g}&tab={}", tab.as_str()),
+        None => format!("{base}/?tab={}", tab.as_str()),
+    }
+}
+
+/// 「Web で開く」リンクボタン（Web ダッシュボードが無効なら None）
+pub fn web_button(base: Option<&str>, guild_id: Option<&str>, tab: WebTab) -> Option<CreateButton> {
+    base.map(|b| CreateButton::new_link(dashboard_url(b, guild_id, tab)).label("Web で開く"))
+}
+
+/// コマンドを実行したサーバーの「Web で開く」ボタン
+fn ctx_web_button(ctx: Context<'_>, tab: WebTab) -> Option<CreateButton> {
+    let guild_id = ctx.guild_id().map(|g| g.to_string());
+    web_button(ctx.data().web_url.as_deref(), guild_id.as_deref(), tab)
+}
+
+/// ボタン1つだけの行（None なら行なし）
+fn link_row(button: Option<CreateButton>) -> Vec<CreateActionRow> {
+    button
+        .map(|b| vec![CreateActionRow::Buttons(vec![b])])
+        .unwrap_or_default()
+}
+
+/// Web ダッシュボードのリンクを表示する（ブラウザで宿題の確認・完了・編集ができます）
+#[poise::command(slash_command)]
+pub async fn web(
+    ctx: Context<'_>,
+    #[description = "チャンネルのみんなに見せる (デフォルト: 自分にだけ表示)"] public: Option<bool>,
+) -> Result<(), Error> {
+    let Some(base) = ctx.data().web_url.as_deref() else {
+        reply_ephemeral(
+            ctx,
+            "Web ダッシュボードはまだ使えません。ボットを動かしている人が `.env` に \
+             `DISCORD_CLIENT_ID` などを設定すると使えるようになります（README 参照）。",
+        )
+        .await?;
+        return Ok(());
+    };
+    let guild_id = ctx.guild_id().map(|g| g.to_string());
+    let url = dashboard_url(base, guild_id.as_deref(), WebTab::Todo);
+    let embed = CreateEmbed::new()
+        .title("Web ダッシュボード")
+        .url(&url)
+        .colour(Colour(0x5865F2))
+        .description(
+            "Discord でログインすると、ブラウザから次のことができます。\n\
+             ・自分が終わっていない宿題と近いテストの確認\n\
+             ・ワンタップで完了 / 取り消し、登録・編集・削除\n\
+             ・カレンダー表示、検索、達成率\n\
+             ・通知やまとめ投稿の設定",
+        )
+        .footer(CreateEmbedFooter::new("ログインは 7 日間有効です"));
+    ctx.send(
+        poise::CreateReply::default()
+            .embed(embed)
+            .components(link_row(Some(
+                CreateButton::new_link(url).label("Web で開く"),
+            )))
+            .ephemeral(!public.unwrap_or(false)),
+    )
+    .await?;
+    Ok(())
+}
 
 pub use hw::{done_buttons, handle_component, hw};
 pub use task::{delete_event, sync_event, task};
@@ -393,19 +503,110 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
             false,
         )
         .field(
+            "/web",
+            "Web ダッシュボードのリンクを表示（ブラウザで確認・完了・編集ができます）",
+            false,
+        )
+        .field(
             "期限の書き方",
             "`明日` `明後日 17:00` `明日17時` `金曜` `12/5` `12/5 13:00` `2025-12-05`",
             false,
         );
 
-    ctx.send(poise::CreateReply::default().embed(embed).embed(hw_embed))
-        .await?;
+    ctx.send(
+        poise::CreateReply::default()
+            .embed(embed)
+            .embed(hw_embed)
+            .components(link_row(ctx_web_button(ctx, WebTab::Todo))),
+    )
+    .await?;
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::Homework;
+
+    #[test]
+    fn builds_dashboard_urls() {
+        assert_eq!(
+            dashboard_url("https://hw.example.com/", Some("123"), WebTab::Exam),
+            "https://hw.example.com/?guild=123&tab=exam"
+        );
+        assert_eq!(
+            dashboard_url("https://hw.example.com", None, WebTab::Todo),
+            "https://hw.example.com/?tab=todo"
+        );
+        assert!(web_button(None, Some("1"), WebTab::Todo).is_none());
+    }
+
+    fn sample_hw(id: i64, kind: HwKind) -> Homework {
+        Homework {
+            id,
+            kind,
+            guild_id: "G".into(),
+            channel_id: "1".into(),
+            created_by: "1".into(),
+            subject: "数学".into(),
+            title: "t".into(),
+            description: None,
+            due_date: "2025-10-10 08:30".into(),
+            created_at: 0,
+            done_by: vec![],
+            repeat_id: None,
+        }
+    }
+
+    /// 行ごとのボタンを JSON にして (custom_id か url) を取り出す
+    fn button_rows(rows: &[CreateActionRow]) -> Vec<Vec<String>> {
+        rows.iter()
+            .map(|row| {
+                let v = serde_json::to_value(row).unwrap();
+                v["components"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|b| {
+                        b["custom_id"]
+                            .as_str()
+                            .or(b["url"].as_str())
+                            .unwrap()
+                            .to_string()
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn done_buttons_keep_room_for_web_link() {
+        let link = || web_button(Some("https://hw.example.com"), Some("G"), WebTab::Todo);
+        let mut list: Vec<Homework> = (1..=30).map(|i| sample_hw(i, HwKind::Homework)).collect();
+        list.push(sample_hw(99, HwKind::Exam));
+
+        // 25個を超えるときは宿題のボタンを24個にして、最後にリンクを置く
+        let rows = button_rows(&done_buttons(&list, true, link()));
+        assert_eq!(rows.len(), 5);
+        assert!(rows.iter().all(|r| r.len() == 5));
+        assert_eq!(rows[4][4], "https://hw.example.com/?guild=G&tab=todo");
+        assert_eq!(rows[4][3], "hwdone:G:24");
+
+        // 少ないときは同じ行に並ぶ
+        let rows = button_rows(&done_buttons(&list[..2], true, link()));
+        assert_eq!(
+            rows,
+            vec![vec![
+                "hwdone:G:1".to_string(),
+                "hwdone:G:2".to_string(),
+                "https://hw.example.com/?guild=G&tab=todo".to_string(),
+            ]]
+        );
+
+        // テストだけ・リンクなしならボタンなし
+        assert!(done_buttons(&list[30..], true, None).is_empty());
+        assert_eq!(link_row(None).len(), 0);
+    }
 
     /// Discord のスラッシュコマンドの制約（名前・説明の長さ、件数、必須引数の順序）を満たすか
     fn check_command(cmd: &poise::Command<crate::Data, Error>, path: &str) {

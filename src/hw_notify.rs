@@ -9,7 +9,7 @@ use poise::serenity_prelude::{
 
 use crate::{
     Error,
-    commands::done_buttons,
+    commands::{WebTab, done_buttons, web_button},
     db::Database,
     models::{Homework, HwKind, HwQuery, HwSettings, Task, WEEKDAYS_JA, mentions},
     time::{DUE_FORMAT, due_to_utc, local_now, next_weekly, parse_time},
@@ -93,13 +93,17 @@ fn reminder_message(
     header: &str,
     footer: &str,
     settings: Option<&HwSettings>,
+    web: Option<&str>,
 ) -> CreateMessage {
+    let link = list
+        .first()
+        .and_then(|hw| web_button(web, Some(&hw.guild_id), WebTab::Todo));
     let lines: Vec<String> = list.iter().map(reminder_line).collect();
     let body = format!("{header}\n{}\n{footer}", lines.join("\n"));
     CreateMessage::new()
         .content(truncate_message(with_role_mention(settings, body)))
         .allowed_mentions(role_allowed_mentions(settings))
-        .components(done_buttons(list, true))
+        .components(done_buttons(list, true, link))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -129,7 +133,11 @@ pub async fn generate_repeats(db: &Database) -> Result<(), Error> {
 // ────────────────────────────────────────────────────────────────────────────
 
 /// 期限前の通知（チャンネル・個人 DM）をまとめて送る
-pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Error> {
+pub async fn check_reminders(
+    db: &Database,
+    http: &Arc<Http>,
+    web: Option<&str>,
+) -> Result<(), Error> {
     let now = Utc::now();
     let local = local_now();
     let candidates = db
@@ -204,6 +212,7 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
             "📚 **宿題・テストが近づいています**",
             "宿題は終わったらボタンか `/hw done` で記録しよう！",
             settings.get(&guild_id),
+            web,
         );
         if let Err(e) = ChannelId::new(id).send_message(http, msg).await {
             eprintln!("宿題通知の送信エラー (channel {}): {:?}", channel, e);
@@ -218,6 +227,7 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
             "📚 **まだ完了になっていない宿題・近づいているテストがあります**",
             "DM 通知の変更は `/hw notify` でできます。",
             None,
+            web,
         );
         if let Err(e) = UserId::new(id).direct_message(http, msg).await {
             eprintln!("宿題 DM の送信エラー (user {}): {:?}", user, e);
@@ -232,7 +242,11 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
 // ────────────────────────────────────────────────────────────────────────────
 
 /// 毎日のまとめ投稿（宿題・テスト・タスク）
-pub async fn check_summaries(db: &Database, http: &Arc<Http>) -> Result<(), Error> {
+pub async fn check_summaries(
+    db: &Database,
+    http: &Arc<Http>,
+    web: Option<&str>,
+) -> Result<(), Error> {
     let now = local_now();
     let today = now.date();
     let today_str = today.format("%Y-%m-%d").to_string();
@@ -293,7 +307,11 @@ pub async fn check_summaries(db: &Database, http: &Arc<Http>) -> Result<(), Erro
         // ボタンは期限が近い宿題から（最大25個）
         let mut msg = CreateMessage::new()
             .embed(summary_embed(&homework, &exams, &tasks, now))
-            .components(done_buttons(&homework, true))
+            .components(done_buttons(
+                &homework,
+                true,
+                web_button(web, Some(&s.guild_id), WebTab::Todo),
+            ))
             .allowed_mentions(role_allowed_mentions(Some(&s)));
         // 載せるものがある日だけ通知ロールを鳴らす
         if !(homework.is_empty() && exams.is_empty() && tasks.is_empty())
@@ -570,8 +588,16 @@ mod tests {
             "見出し",
             "フッター",
             Some(&settings),
+            Some("https://hw.example.com"),
         ))
         .unwrap();
+        // 完了ボタンの後ろに「Web で開く」
+        let buttons = &json["components"][0]["components"];
+        assert_eq!(buttons[0]["custom_id"], "hwdone:G:1");
+        assert_eq!(
+            buttons[1]["url"],
+            "https://hw.example.com/?guild=G&tab=todo"
+        );
         assert!(
             json["content"]
                 .as_str()
@@ -586,7 +612,16 @@ mod tests {
 
         // ロール未設定・DM では誰も鳴らさない
         let json =
-            serde_json::to_value(reminder_message(&[item], "見出し", "フッター", None)).unwrap();
+            serde_json::to_value(reminder_message(&[item], "見出し", "フッター", None, None))
+                .unwrap();
+        // Web ダッシュボードが無効ならリンクなし
+        assert_eq!(
+            json["components"][0]["components"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(json["content"].as_str().unwrap().starts_with("見出し"));
         assert_eq!(json["allowed_mentions"]["roles"], serde_json::json!([]));
         assert_eq!(json["allowed_mentions"]["parse"], serde_json::json!([]));

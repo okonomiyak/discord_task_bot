@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState, Auth, WebGuild, discord::ChannelInfo};
 use crate::{
-    commands::{delete_event, done_buttons, sync_event},
+    commands::{WebTab, delete_event, done_buttons, sync_event, web_button},
     db::{HwEdit, TaskEdit},
     hw_notify::{role_allowed_mentions, with_role_mention},
     models::{
@@ -393,7 +393,15 @@ async fn create_homework(
         );
         let msg = CreateMessage::new()
             .content(with_role_mention(Some(&settings), content))
-            .components(done_buttons(std::slice::from_ref(&hw), false));
+            .components(done_buttons(
+                std::slice::from_ref(&hw),
+                false,
+                web_button(
+                    Some(&state.config.base_url),
+                    Some(&hw.guild_id),
+                    WebTab::from(hw.kind),
+                ),
+            ));
         announce(&state, channel.as_deref(), msg, Some(&settings)).await;
     }
 

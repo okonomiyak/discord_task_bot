@@ -4,7 +4,10 @@ use poise::serenity_prelude::{
     CreateInteractionResponseMessage, EditRole, RoleId,
 };
 
-use super::{build_pages, due_help, parse_due_with, reply_ephemeral, send_paginated, truncate};
+use super::{
+    WebTab, build_pages, ctx_web_button, due_help, link_row, parse_due_with, reply_ephemeral,
+    send_paginated, truncate,
+};
 use crate::{
     Context, Data, Error,
     db::HwEdit,
@@ -190,12 +193,18 @@ fn button_id(prefix: &str, hw: &Homework) -> String {
     format!("{prefix}:{}:{}", hw.guild_id, hw.id)
 }
 
-/// 宿題の「完了」ボタン（テストには付けない、最大25個）
-pub fn done_buttons(list: &[Homework], with_label: bool) -> Vec<CreateActionRow> {
-    let buttons: Vec<CreateButton> = list
+/// 宿題の「完了」ボタン（テストには付けない）。link（「Web で開く」）を渡すと最後に付ける。
+/// メッセージのボタンは最大25個なので、超える分は省く
+pub fn done_buttons(
+    list: &[Homework],
+    with_label: bool,
+    link: Option<CreateButton>,
+) -> Vec<CreateActionRow> {
+    let limit = if link.is_some() { 24 } else { 25 };
+    let mut buttons: Vec<CreateButton> = list
         .iter()
         .filter(|hw| hw.kind == HwKind::Homework)
-        .take(25)
+        .take(limit)
         .map(|hw| {
             let label = if with_label {
                 truncate(&format!("完了 #{} {}", hw.id, hw.subject), 80)
@@ -208,6 +217,7 @@ pub fn done_buttons(list: &[Homework], with_label: bool) -> Vec<CreateActionRow>
                 .label(label)
         })
         .collect();
+    buttons.extend(link);
     buttons
         .chunks(5)
         .map(|row| CreateActionRow::Buttons(row.to_vec()))
@@ -500,8 +510,14 @@ async fn register(
                     ),
                 ),
             )
-            .components(done_buttons(std::slice::from_ref(&hw), false)),
-        HwKind::Exam => base.embed(hw_embed(&hw, "📝 テストを登録しました", Colour(0xE74C3C))),
+            .components(done_buttons(
+                std::slice::from_ref(&hw),
+                false,
+                ctx_web_button(ctx, WebTab::Homework),
+            )),
+        HwKind::Exam => base
+            .embed(hw_embed(&hw, "📝 テストを登録しました", Colour(0xE74C3C)))
+            .components(link_row(ctx_web_button(ctx, WebTab::Exam))),
     };
     ctx.send(reply).await?;
     Ok(())
@@ -550,7 +566,7 @@ pub async fn todo(
             }
         },
     );
-    send_paginated(ctx, pages, true).await
+    send_paginated(ctx, pages, true, ctx_web_button(ctx, WebTab::Todo)).await
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -617,7 +633,7 @@ async fn show_list(
         HwKind::Exam => Colour(0xE74C3C),
     };
     let pages = build_pages(&title, colour, &list, |hw| hw_field(hw, &me));
-    send_paginated(ctx, pages, false).await
+    send_paginated(ctx, pages, false, ctx_web_button(ctx, WebTab::from(kind))).await
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -704,7 +720,11 @@ pub async fn view(
     ctx.send(
         poise::CreateReply::default()
             .embed(embed)
-            .components(done_buttons(std::slice::from_ref(&hw), false)),
+            .components(done_buttons(
+                std::slice::from_ref(&hw),
+                false,
+                ctx_web_button(ctx, WebTab::from(hw.kind)),
+            )),
     )
     .await?;
     Ok(())
@@ -932,7 +952,11 @@ pub async fn repeat_add(
             format!("#{} 期限: {}", hw.id, format_due(Some(&hw.due_date))),
             false,
         );
-        reply = reply.components(done_buttons(std::slice::from_ref(hw), false));
+        reply = reply.components(done_buttons(
+            std::slice::from_ref(hw),
+            false,
+            ctx_web_button(ctx, WebTab::Settings),
+        ));
     }
     ctx.send(reply.embed(embed)).await?;
     Ok(())
@@ -960,7 +984,7 @@ pub async fn repeat_list(ctx: Context<'_>) -> Result<(), Error> {
             ),
         )
     });
-    send_paginated(ctx, pages, false).await
+    send_paginated(ctx, pages, false, ctx_web_button(ctx, WebTab::Settings)).await
 }
 
 /// 毎週の宿題を止める（登録済みの宿題は残ります）
@@ -1101,6 +1125,7 @@ pub async fn stats(
     ctx.send(
         poise::CreateReply::default()
             .embed(embed)
+            .components(link_row(ctx_web_button(ctx, WebTab::Todo)))
             .ephemeral(!public.unwrap_or(false)),
     )
     .await?;

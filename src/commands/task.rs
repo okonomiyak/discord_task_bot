@@ -4,8 +4,8 @@ use poise::serenity_prelude::{
 };
 
 use super::{
-    RemindChoice, build_pages, due_help, guild, parse_due_with, reply_ephemeral, reply_not_found,
-    send_paginated, truncate,
+    RemindChoice, WebTab, build_pages, ctx_web_button, due_help, guild, parse_due_with,
+    reply_ephemeral, reply_not_found, send_paginated, truncate,
 };
 use crate::{
     Context, Error,
@@ -232,7 +232,7 @@ async fn send_task_list(ctx: Context<'_>, title: &str, tasks: &[Task]) -> Result
             ),
         )
     });
-    send_paginated(ctx, pages, false).await
+    send_paginated(ctx, pages, false, ctx_web_button(ctx, WebTab::Tasks)).await
 }
 
 fn status_filter(filter: Option<StatusFilterChoice>) -> (Option<TaskStatus>, bool) {
