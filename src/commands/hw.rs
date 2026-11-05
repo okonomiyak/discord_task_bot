@@ -797,6 +797,7 @@ pub async fn share(
     subject: Option<String>,
 ) -> Result<(), Error> {
     let guild_id = require_guild!(ctx);
+    let guild_id_for_settings = guild_id.clone();
     let kind = kind.unwrap_or(ShareKind::All);
     let db = &ctx.data().db;
     let base = HwQuery {
@@ -829,14 +830,36 @@ pub async fn share(
         reply_ephemeral(ctx, "これからの宿題・テストはありません。").await?;
         return Ok(());
     }
+    // 長押し（PC はドラッグで選択）でコピーできるよう、本文だけにする。
+    // 内容に URL があってもカードを出さない設定のときは、Discord に直接応答してフラグを付ける
+    // （poise の返信ではメッセージのフラグを指定できない）
+    let hide = db
+        .hw_settings(guild_id_for_settings)
+        .await?
+        .hide_link_previews;
+    let components = link_row(ctx_web_button(ctx, WebTab::Todo));
+    if hide && let poise::Context::Application(actx) = ctx {
+        let mut flags = serenity::InteractionResponseFlags::EPHEMERAL;
+        flags |= serenity::InteractionResponseFlags::SUPPRESS_EMBEDS;
+        actx.interaction
+            .create_response(
+                ctx.serenity_context(),
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(text)
+                        .allowed_mentions(CreateAllowedMentions::new())
+                        .components(components)
+                        .flags(flags),
+                ),
+            )
+            .await?;
+        return Ok(());
+    }
     ctx.send(
         poise::CreateReply::default()
             .content(text)
-            .embed(CreateEmbed::new().description(
-                "上の文章を長押し（PC はドラッグで選択）してコピーし、LINE などに貼り付けられます",
-            ))
             .allowed_mentions(CreateAllowedMentions::new())
-            .components(link_row(ctx_web_button(ctx, WebTab::Todo)))
+            .components(components)
             .ephemeral(true),
     )
     .await?;
@@ -1496,10 +1519,27 @@ fn settings_embed(s: &HwSettings) -> CreateEmbed {
             &s.default_time,
             true,
         )
+        .field(
+            "本文の URL のカード",
+            if s.hide_link_previews {
+                "出さない"
+            } else {
+                "出す"
+            },
+            true,
+        )
         .footer(serenity::CreateEmbedFooter::new(format!(
             "時刻は {} / 個人の DM 通知は /hw notify で設定",
             timezone()
         )))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, poise::ChoiceParameter)]
+pub enum LinkPreviewChoice {
+    #[name = "出さない"]
+    Hide,
+    #[name = "出す"]
+    Show,
 }
 
 /// サーバーの宿題の通知・まとめ投稿を設定する（何も指定しないと現在の設定を表示）
@@ -1514,6 +1554,8 @@ pub async fn settings(
         String,
     >,
     #[description = "期限の時刻を省略したときの時刻（例: 08:30）"] default_time: Option<String>,
+    #[description = "通知などの本文に入った URL をカードで表示するか（初期値: 出さない）"]
+    link_preview: Option<LinkPreviewChoice>,
 ) -> Result<(), Error> {
     let guild_id = require_guild!(ctx);
     let db = &ctx.data().db;
@@ -1556,12 +1598,14 @@ pub async fn settings(
         summary_time,
         default_time,
         notify_role_id: None,
+        hide_link_previews: link_preview.map(|c| c == LinkPreviewChoice::Hide),
     };
 
     let changed = patch.channel_id.is_some()
         || patch.remind_before.is_some()
         || patch.summary_time.is_some()
-        || patch.default_time.is_some();
+        || patch.default_time.is_some()
+        || patch.hide_link_previews.is_some();
     if !changed {
         let current = db.hw_settings(guild_id).await?;
         ctx.send(poise::CreateReply::default().embed(settings_embed(&current)))

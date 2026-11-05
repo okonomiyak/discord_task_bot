@@ -159,6 +159,8 @@
   .seg button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
   label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
   .field input, .field textarea, .field select { color: var(--text); padding: 9px 10px; border: 1px solid var(--border); border-radius: 0; background: var(--bg); font-weight: 400; font-size: 16px; }
+  .field .toggle { white-space: nowrap; color: var(--text); font-weight: 400; font-size: 15px; }
+  .field .toggle input[type=checkbox] { width: auto; flex: none; padding: 0; }
   .field textarea { min-height: 70px; resize: vertical; }
   .quick { display: flex; flex-wrap: wrap; gap: 6px; }
   .quick button { border: 1px solid var(--border); background: var(--surface-2); border-radius: 0; padding: 3px 10px; font-size: 13px; cursor: pointer; }
@@ -790,6 +792,7 @@ function viewHelp(v) {
       ["自分への DM", "設定画面の「自分への DM 通知」で、未完了の宿題とテストを期限前に DM で受け取れる"],
       ["通知ロール", "Discord の /hw role setup で作るロール。付けた人に、登録・期限前・まとめの通知でメンションが届く"],
       ["通知チャンネル", "未設定なら、宿題を登録したチャンネル（まとめは最後に登録したチャンネル）に投稿"],
+      ["URL のカード", "内容に URL を書いても、通知などで大きなカード（プレビュー）に展開しない（初期値）。設定画面の「本文の URL のカード」で変えられる"],
     ])),
 
     helpSection("help-faq", "よくある質問", defs([
@@ -889,12 +892,14 @@ async function viewSettings(v) {
   summaryOn.addEventListener("change", () => { summaryTime.disabled = !summaryOn.checked; });
   const defaultTime = el("input", { type: "time", value: st.default_time });
   const remind = remindSelect("remind_before", st.remind_choices, st.remind_before);
+  const hidePreviews = el("input", { type: "checkbox", checked: st.hide_link_previews });
   const saveServer = el("button", { type: "button", class: "btn primary" }, "保存");
   saveServer.addEventListener("click", () => saveSettings("/settings", "PATCH", {
     channel_id: channel.value,
     remind_before: Number(remind.value),
     summary_time: summaryOn.checked ? summaryTime.value : "off",
     default_time: defaultTime.value,
+    hide_link_previews: hidePreviews.checked,
   }, saveServer));
   v.append(el("section", { class: "panel" },
     el("h2", {}, "サーバーの設定"),
@@ -905,6 +910,9 @@ async function viewSettings(v) {
       field("時刻を省略したときの期限", defaultTime)),
     field("毎日のまとめ投稿",
       el("div", { class: "row" }, el("label", { class: "toggle" }, summaryOn, "オン"), summaryTime)),
+    field("本文の URL のカード",
+      el("div", { class: "row" }, el("label", { class: "toggle" }, hidePreviews, "出さない")),
+      "通知や Web から登録したときの投稿で、内容に書かれた URL がカード（プレビュー）に展開されないようにする"),
     field("課題通知ロール",
       el("div", {}, st.notify_role ? `@${st.notify_role.name || "（削除されたロール）"}` : "なし"),
       "作成・変更は Discord の /hw role setup から（ロールの管理権限が必要）"),

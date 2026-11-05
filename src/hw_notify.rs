@@ -4,7 +4,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
 use poise::serenity_prelude::{
     ChannelId, Colour, CreateAllowedMentions, CreateEmbed, CreateEmbedFooter, CreateMessage, Http,
-    RoleId, UserId,
+    MessageFlags, RoleId, UserId,
 };
 
 use crate::{
@@ -87,7 +87,18 @@ pub fn with_role_mention(settings: Option<&HwSettings>, body: String) -> String 
     }
 }
 
-/// 期限前の通知。settings を渡すとサーバーの通知ロールをメンションする（DM では None）
+/// 本文に入った URL（宿題の内容に書かれたものなど）のカードを出さないようにする。
+/// 埋め込み（Embed）も消えるので、Embed を使うメッセージには使わない
+pub fn suppress_link_previews(msg: CreateMessage, hide: bool) -> CreateMessage {
+    if hide {
+        msg.flags(MessageFlags::SUPPRESS_EMBEDS)
+    } else {
+        msg
+    }
+}
+
+/// 期限前の通知。settings を渡すとサーバーの通知ロールをメンションする（DM では None）。
+/// URL のカードはサーバーの設定に従い、DM では出さない
 fn reminder_message(
     list: &[Homework],
     header: &str,
@@ -100,10 +111,11 @@ fn reminder_message(
         .and_then(|hw| web_button(web, Some(&hw.guild_id), WebTab::Todo));
     let lines: Vec<String> = list.iter().map(reminder_line).collect();
     let body = format!("{header}\n{}\n{footer}", lines.join("\n"));
-    CreateMessage::new()
+    let msg = CreateMessage::new()
         .content(truncate_message(with_role_mention(settings, body)))
         .allowed_mentions(role_allowed_mentions(settings))
-        .components(done_buttons(list, true, link))
+        .components(done_buttons(list, true, link));
+    suppress_link_previews(msg, settings.is_none_or(|s| s.hide_link_previews))
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -609,11 +621,28 @@ mod tests {
             serde_json::json!(["777"])
         );
         assert_eq!(json["allowed_mentions"]["parse"], serde_json::json!([]));
+        // 内容に URL があってもカードを出さない（初期値）
+        assert_eq!(json["flags"], 4);
+
+        // 設定で「出す」にしたらフラグなし
+        let mut show = settings.clone();
+        show.hide_link_previews = false;
+        let json = serde_json::to_value(reminder_message(
+            &[item.clone()],
+            "見出し",
+            "フッター",
+            Some(&show),
+            None,
+        ))
+        .unwrap();
+        assert!(json.get("flags").is_none_or(|f| f.is_null()));
 
         // ロール未設定・DM では誰も鳴らさない
         let json =
             serde_json::to_value(reminder_message(&[item], "見出し", "フッター", None, None))
                 .unwrap();
+        // DM でもカードは出さない
+        assert_eq!(json["flags"], 4);
         // Web ダッシュボードが無効ならリンクなし
         assert_eq!(
             json["components"][0]["components"]

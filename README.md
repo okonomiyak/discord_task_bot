@@ -264,7 +264,7 @@ GitHub Actions で push / PR ごとに同じチェックが走ります。
 | `/hw exam list [subject] [past]` | テストの予定 |
 | `/hw repeat add subject title weekday [time] [memo]` | 毎週の宿題を登録。今回の分をすぐ登録し、期限が過ぎるたびに翌週の分を自動登録 |
 | `/hw repeat list` / `/hw repeat delete id` | 毎週の宿題の一覧・停止（登録済みの宿題は残る） |
-| `/hw settings [channel] [remind] [summary] [default_time]` | サーバーの設定。何も指定しないと現在の設定を表示 |
+| `/hw settings [channel] [remind] [summary] [default_time] [link_preview]` | サーバーの設定。何も指定しないと現在の設定を表示。`link_preview` は通知などの本文に入った URL をカードで展開するか（初期値: 出さない。期限前の通知・DM・タスクのリマインダー・Web から登録したときの投稿・`/hw share` に効く） |
 | `/hw stats [period] [public]` | 自分の宿題の達成率（全体・期限が過ぎた分・これからの分・科目別）。期間は今週/今月/全期間。`public:true` でチャンネルに表示 |
 | `/hw notify [timing]` | 自分への DM 通知のタイミング（オフ / 1時間前〜1週間前） |
 | `/hw role setup [role]` | 課題通知ロールを作成（または既存ロールを指定）し、「🔔 通知を受け取る／🔕 受け取らない」ボタンを投稿。要「ロールの管理」権限 |

@@ -11,7 +11,7 @@ use super::{ApiError, AppState, Auth, WebGuild, discord::ChannelInfo};
 use crate::{
     commands::{WebTab, delete_event, done_buttons, gcal_button, sync_event, web_button},
     db::{HwEdit, TaskEdit},
-    hw_notify::{role_allowed_mentions, with_role_mention},
+    hw_notify::{role_allowed_mentions, suppress_link_previews, with_role_mention},
     models::{
         Homework, HwKind, HwQuery, HwRepeat, HwSettings, HwSettingsPatch, NewHomework, Priority,
         Task, TaskQuery, TaskSort, TaskStatus,
@@ -114,6 +114,7 @@ async fn announce(
     channel: Option<&str>,
     msg: CreateMessage,
     settings: Option<&HwSettings>,
+    hide_link_previews: bool,
 ) {
     let Some(id) = channel
         .and_then(|c| c.parse::<u64>().ok())
@@ -121,7 +122,10 @@ async fn announce(
     else {
         return;
     };
-    let msg = msg.allowed_mentions(role_allowed_mentions(settings));
+    let msg = suppress_link_previews(
+        msg.allowed_mentions(role_allowed_mentions(settings)),
+        hide_link_previews,
+    );
     if let Err(e) = ChannelId::new(id).send_message(&state.http, msg).await {
         eprintln!("Web からの登録の投稿に失敗しました: {e:?}");
     }
@@ -416,7 +420,14 @@ async fn create_homework(
                 .into_iter()
                 .flatten(),
             ));
-        announce(&state, channel.as_deref(), msg, Some(&settings)).await;
+        announce(
+            &state,
+            channel.as_deref(),
+            msg,
+            Some(&settings),
+            settings.hide_link_previews,
+        )
+        .await;
     }
 
     let status = if created {
@@ -644,6 +655,8 @@ struct SettingsDto {
     summary_time: Option<String>,
     default_time: String,
     notify_role: Option<RoleDto>,
+    /// 本文の URL のカードを出さない
+    hide_link_previews: bool,
     /// 自分への DM 通知（秒、None でオフ）
     my_dm_remind_before: Option<i64>,
     timezone: String,
@@ -666,6 +679,7 @@ async fn settings_dto(state: &AppState, gid: &str, user_id: &str) -> Result<Sett
         summary_time: s.summary_time,
         default_time: s.default_time,
         notify_role,
+        hide_link_previews: s.hide_link_previews,
         my_dm_remind_before: state
             .db
             .hw_get_dm(gid.to_string(), user_id.to_string())
@@ -713,6 +727,7 @@ struct SettingsInput {
     /// "off" でオフ
     summary_time: Option<String>,
     default_time: Option<String>,
+    hide_link_previews: Option<bool>,
 }
 
 /// サーバーの設定を変更する（Discord の /hw settings と同じく誰でも変更できる）
@@ -759,6 +774,7 @@ async fn update_settings(
                 summary_time,
                 default_time,
                 notify_role_id: None,
+                hide_link_previews: input.hide_link_previews,
             },
         )
         .await?;
@@ -1077,7 +1093,13 @@ async fn create_task(
         task.title,
         due
     ));
-    announce(&state, channel.as_deref(), msg, None).await;
+    // タスクの投稿では通知ロールを鳴らさない（サーバーの設定は URL のカードにだけ使う）
+    let hide = state
+        .db
+        .hw_settings(task.guild_id.clone())
+        .await?
+        .hide_link_previews;
+    announce(&state, channel.as_deref(), msg, None, hide).await;
 
     Ok((StatusCode::CREATED, Json(task_dto(task))))
 }

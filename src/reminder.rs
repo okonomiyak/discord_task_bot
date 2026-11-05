@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use poise::serenity_prelude::{ChannelId, Http};
+use poise::serenity_prelude::{self as serenity, ChannelId, CreateMessage, Http, Message};
 
 use crate::{
     Error,
@@ -31,6 +31,23 @@ pub async fn run(db: Database, http: Arc<Http>, web_url: Option<String>) {
             eprintln!("宿題まとめ投稿エラー: {:?}", e);
         }
     }
+}
+
+/// タスクの通知を送る（タイトルに書かれた URL のカードはサーバーの設定に従う）
+async fn send_notice(
+    db: &Database,
+    http: &Arc<Http>,
+    channel_id: ChannelId,
+    task: &Task,
+    content: String,
+) -> serenity::Result<Message> {
+    let hide = db
+        .hw_settings(task.guild_id.clone())
+        .await
+        .map(|s| s.hide_link_previews)
+        .unwrap_or(true);
+    let msg = crate::hw_notify::suppress_link_previews(CreateMessage::new().content(content), hide);
+    channel_id.send_message(http, msg).await
 }
 
 fn channel_of(task: &Task) -> Option<ChannelId> {
@@ -75,7 +92,7 @@ pub async fn check_reminders(db: &Database, http: &Arc<Http>) -> Result<(), Erro
             format_due(task.due_date.as_deref()),
         );
 
-        if let Err(e) = channel_id.say(http, &content).await {
+        if let Err(e) = send_notice(db, http, channel_id, task, content).await {
             eprintln!(
                 "リマインダー送信エラー (reminder #{}): {:?}",
                 reminder.reminder_id, e
@@ -116,7 +133,7 @@ pub async fn check_overdue(db: &Database, http: &Arc<Http>) -> Result<(), Error>
             task.id,
         );
 
-        if let Err(e) = channel_id.say(http, &content).await {
+        if let Err(e) = send_notice(db, http, channel_id, &task, content).await {
             eprintln!("期限切れ通知の送信エラー (task #{}): {:?}", task.id, e);
         } else {
             db.mark_overdue_notified(task.id).await?;

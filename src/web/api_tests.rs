@@ -591,6 +591,7 @@ async fn settings_can_be_viewed_and_changed() {
     assert_eq!(s["default_time"], "08:30");
     assert_eq!(s["notify_role"], Value::Null);
     assert_eq!(s["my_dm_remind_before"], Value::Null);
+    assert_eq!(s["hide_link_previews"], true);
 
     let (status, s) = call(
         &state,
@@ -598,7 +599,8 @@ async fn settings_can_be_viewed_and_changed() {
         &url,
         Some(&alice),
         Some(json!({
-            "channel_id": "11", "remind_before": 0, "summary_time": "7:30", "default_time": "9時"
+            "channel_id": "11", "remind_before": 0, "summary_time": "7:30", "default_time": "9時",
+            "hide_link_previews": false
         })),
     )
     .await;
@@ -607,6 +609,7 @@ async fn settings_can_be_viewed_and_changed() {
     assert_eq!(s["remind_before"], Value::Null);
     assert_eq!(s["summary_time"], "07:30");
     assert_eq!(s["default_time"], "09:00");
+    assert_eq!(s["hide_link_previews"], false);
 
     // 未設定に戻す・まとめ投稿をオフ
     let (_, s) = call(
