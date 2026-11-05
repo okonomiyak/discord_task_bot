@@ -418,8 +418,8 @@ fn repeat_label(r: &HwRepeat) -> String {
 #[poise::command(
     slash_command,
     subcommands(
-        "add", "todo", "list", "done", "undo", "view", "edit", "delete", "exam", "repeat", "stats",
-        "settings", "notify", "role"
+        "add", "copy", "todo", "list", "share", "done", "undo", "view", "edit", "delete", "exam",
+        "repeat", "stats", "settings", "notify", "role"
     )
 )]
 pub async fn hw(_ctx: Context<'_>) -> Result<(), Error> {
@@ -725,6 +725,107 @@ pub async fn view(
                 false,
                 ctx_web_button(ctx, WebTab::from(hw.kind)),
             )),
+    )
+    .await?;
+    Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// /hw copy ・ /hw share
+// ────────────────────────────────────────────────────────────────────────────
+
+/// 前の宿題・テストを複製して登録する（期限だけ変えれば OK）
+#[poise::command(slash_command)]
+pub async fn copy(
+    ctx: Context<'_>,
+    #[description = "複製する宿題・テスト（入力すると候補が出ます）"]
+    #[autocomplete = "ac_any"]
+    id: i64,
+    #[description = "新しい期限・日時（例: 来週の分なら 金曜 / 12/5）"] due: String,
+    #[description = "内容を変える（省略時は元と同じ）"]
+    #[max_length = 100]
+    title: Option<String>,
+    #[description = "メモを変える（省略時は元と同じ）"]
+    #[max_length = 1000]
+    memo: Option<String>,
+) -> Result<(), Error> {
+    let guild_id = require_guild!(ctx);
+    let Some(src) = ctx.data().db.hw_get(id, guild_id).await? else {
+        return reply_hw_not_found(ctx, id).await;
+    };
+    register(
+        ctx,
+        src.kind,
+        src.subject,
+        title.unwrap_or(src.title),
+        due,
+        memo.or(src.description),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, poise::ChoiceParameter)]
+pub enum ShareKind {
+    #[name = "宿題とテスト"]
+    All,
+    #[name = "宿題だけ"]
+    Homework,
+    #[name = "テストだけ"]
+    Exam,
+}
+
+/// これからの宿題・テストを、LINE などに貼れるテキストで表示する（自分にだけ表示）
+#[poise::command(slash_command)]
+pub async fn share(
+    ctx: Context<'_>,
+    #[description = "載せるもの (デフォルト: 宿題とテスト)"] kind: Option<ShareKind>,
+    #[description = "宿題は自分が終わっていないものだけ (デフォルト: false)"] mine: Option<bool>,
+    #[description = "科目で絞り込み"]
+    #[autocomplete = "ac_subject"]
+    subject: Option<String>,
+) -> Result<(), Error> {
+    let guild_id = require_guild!(ctx);
+    let kind = kind.unwrap_or(ShareKind::All);
+    let db = &ctx.data().db;
+    let base = HwQuery {
+        subject,
+        due_from: Some(local_now().format(DUE_FORMAT).to_string()),
+        ..Default::default()
+    };
+    let homework = if kind == ShareKind::Exam {
+        vec![]
+    } else {
+        let query = HwQuery {
+            kind: Some(HwKind::Homework),
+            not_done_by: mine.unwrap_or(false).then(|| ctx.author().id.to_string()),
+            ..base.clone()
+        };
+        db.hw_list(guild_id.clone(), query).await?
+    };
+    let exams = if kind == ShareKind::Homework {
+        vec![]
+    } else {
+        let query = HwQuery {
+            kind: Some(HwKind::Exam),
+            ..base
+        };
+        db.hw_list(guild_id, query).await?
+    };
+
+    let text = crate::share::share_text(&homework, &exams);
+    if text.is_empty() {
+        reply_ephemeral(ctx, "これからの宿題・テストはありません。").await?;
+        return Ok(());
+    }
+    ctx.send(
+        poise::CreateReply::default()
+            .content(text)
+            .embed(CreateEmbed::new().description(
+                "上の文章を長押し（PC はドラッグで選択）してコピーし、LINE などに貼り付けられます",
+            ))
+            .allowed_mentions(CreateAllowedMentions::new())
+            .components(link_row(ctx_web_button(ctx, WebTab::Todo)))
+            .ephemeral(true),
     )
     .await?;
     Ok(())

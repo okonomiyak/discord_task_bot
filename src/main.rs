@@ -3,6 +3,7 @@ mod db;
 mod hw_notify;
 mod models;
 mod reminder;
+mod share;
 mod stats;
 mod time;
 mod web;

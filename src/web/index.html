@@ -152,6 +152,9 @@
   .btn { border: 0; border-radius: 0; padding: 9px 16px; font-weight: 700; cursor: pointer; background: var(--surface-2); }
   .btn.primary { background: var(--accent); color: var(--accent-text); }
   .btn.danger { background: none; color: var(--danger); margin-right: auto; }
+  .btn.small { padding: 6px 10px; font-size: 13px; font-weight: 600; color: var(--text); border: 1px solid var(--border); background: var(--surface); }
+  .toolbar > span:first-child { white-space: nowrap; }
+  .toolbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
   .error { color: var(--danger); font-size: 13px; min-height: 1em; }
 
   .stats { background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 14px; margin-bottom: 8px; box-shadow: var(--shadow); }
@@ -301,6 +304,7 @@
     <div class="error" id="form-error"></div>
     <div class="btns">
       <button type="button" class="btn danger" id="delete" hidden>削除</button>
+      <button type="button" class="btn" id="duplicate" hidden title="同じ内容で新しく登録する（期限は入れ直す）">複製</button>
       <button type="button" class="btn" id="cancel">キャンセル</button>
       <button type="submit" class="btn primary" id="save">保存</button>
     </div>
@@ -385,6 +389,41 @@ function dueEl(unix, label = "期限") {
   return el("span", { class: `due ${cls}` }, `${fmtDate(unix)}・${relative(unix)}`);
 }
 function empty(text) { return el("div", { class: "empty" }, text); }
+
+/// LINE などに貼る一覧のテキスト（Discord の /hw share と同じ書き方: src/share.rs）
+function shareDue(due) {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(due || "");
+  if (!m) return due || "";
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return `${+m[2]}/${+m[3]}(${WD[d.getDay()]}) ${m[4]}:${m[5]}`;
+}
+function shareText(homework, exams) {
+  const out = [];
+  for (const [heading, list, until] of [["【宿題】", homework, true], ["【テスト】", exams, false]]) {
+    if (!list.length) continue;
+    if (out.length) out.push("");
+    out.push(heading, ...list.map((h) => `・${h.subject} ${h.title}（${shareDue(h.due)}${until ? "まで" : ""}）`));
+  }
+  return out.join("\n");
+}
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // http で開いているときなど、クリップボード API が使えないとき
+    const ta = el("textarea", { style: "position:fixed;top:0;left:0;opacity:0" });
+    ta.value = text; document.body.append(ta); ta.select();
+    const ok = document.execCommand("copy"); ta.remove();
+    if (!ok) { toast("コピーできませんでした"); return; }
+  }
+  toast("コピーしました。LINE などに貼り付けられます");
+}
+/// 「テキストでコピー」ボタン（何もなければ出さない）
+function copyButton(homework, exams) {
+  if (!homework.length && !exams.length) return null;
+  return el("button", { type: "button", class: "btn small", title: "LINE などに貼れる文章でコピー",
+    onclick: () => copyText(shareText(homework, exams)) }, "テキストでコピー");
+}
 
 /// 科目名から色相を決める（同じ科目はいつも同じ色）。
 /// よくある科目は見分けやすい色に固定し、それ以外は名前から12色のどれかに振り分ける
@@ -573,6 +612,8 @@ async function viewTodo(v) {
   const soon = exams.filter((e) => e.due_unix - now < 14 * 86400);
 
   const main = el("div", { class: "todo-main" });
+  const copy = copyButton(list, soon);
+  if (copy) main.append(el("div", { class: "toolbar" }, el("span", {}, "自分がまだ終わっていない宿題"), copy));
   if (!list.length) main.append(empty("未完了の宿題はありません"));
   if (over.length) main.append(el("div", { class: "section-title" }, `期限切れ（${over.length}）`), cardList(over, hwCard));
   if (rest.length) main.append(el("div", { class: "section-title" }, `これから（${rest.length}）`), cardList(rest, hwCard));
@@ -583,9 +624,11 @@ async function viewTodo(v) {
 }
 
 async function viewHw(v, kind) {
-  v.append(el("div", { class: "toolbar" }, el("span", {}, kind === "exam" ? "テストの予定" : "みんなの宿題"), pastToggle()));
   const scope = state.past ? "past" : "upcoming";
   const list = await api(g(`/homework?scope=${scope}&kind=${kind}`));
+  const copy = kind === "exam" ? copyButton([], list) : copyButton(list, []);
+  v.append(el("div", { class: "toolbar" }, el("span", {}, kind === "exam" ? "テストの予定" : "みんなの宿題"),
+    el("div", { class: "toolbar-right" }, pastToggle(), copy)));
   if (!list.length) v.append(empty(kind === "exam" ? "テストの予定はありません" : "宿題はありません。＋ から追加できます"));
   v.append(cardList(list, hwCard));
 }
@@ -704,6 +747,8 @@ function viewHelp(v) {
       ["クラス ○%", "宿題の完了を記録したことがある人のうち、終わった人の割合"],
       ["編集", "右の鉛筆。科目・内容・期限・メモを変えられる"],
       ["削除", "編集画面の「削除」。宿題を消せるのは登録した人か、メッセージの管理権限がある人だけ"],
+      ["複製", "編集画面の「複製」。科目・内容・メモが入った状態で新しく追加できる。期限だけ入れ直す"],
+      ["テキストでコピー", "やること・宿題・テストの画面の上にあるボタン。表示している一覧を「・数学 ワーク p.10（11/6(木) 08:30まで）」のような文章でコピーし、LINE などに貼れる"],
       ["毎週", "毎週の宿題から自動で登録されたもの。期限が過ぎると翌週の分が登録される"],
       ["メモのリンク", "メモに書いた https:// で始まる URL は押すと開ける"],
     ])),
@@ -742,6 +787,8 @@ function viewHelp(v) {
         ["/hw list", "宿題の一覧（past:true で期限が過ぎたもの）"],
         ["/hw done ・ /hw undo", "自分の分を完了にする・取り消す"],
         ["/hw view ・ edit ・ delete", "詳細・編集・削除"],
+        ["/hw copy", "前の宿題・テストを複製して登録（新しい期限を指定）"],
+        ["/hw share", "これからの宿題・テストを LINE などに貼れる文章で表示"],
         ["/hw exam add ・ list", "テストの登録・一覧"],
         ["/hw repeat add ・ list ・ delete", "毎週の宿題"],
         ["/hw stats", "自分の達成率（public:true でみんなに見せる）"],
@@ -939,26 +986,30 @@ function quickDates() {
     q.append(el("button", { type: "button", onclick: () => { $("#form [name=due]").value = w.length === 1 ? `${w}曜` : w; } }, w.length === 1 ? `${w}曜` : w)));
 }
 
-async function openEditor(type, item = null) {
+/// item を渡すと編集、copyFrom を渡すとその内容を入れた状態で新しく追加（複製）
+async function openEditor(type, item = null, copyFrom = null) {
   state.editing = { type, item };
   const f = $("#form");
   f.reset(); $("#form-error").textContent = ""; $("#picker").value = "";
   $("#kind-seg").hidden = !!item;
-  $("#form-title").textContent = item ? `#${item.id} を編集` : "追加";
+  $("#form-title").textContent = item ? `#${item.id} を編集` : copyFrom ? `#${copyFrom.id} を複製して追加` : "追加";
   $("#delete").hidden = !item || (type !== "task" && !item.can_delete);
+  $("#duplicate").hidden = !item;
   setKind(type === "task" ? "task" : type);
-  if (item) {
-    f.elements.title.value = item.title;
-    f.elements.due.value = item.due || "";
-    if (type === "task") { f.elements.priority.value = item.priority; f.elements.memo.value = item.description || ""; }
-    else { f.elements.subject.value = item.subject; f.elements.memo.value = item.memo || ""; }
+  const src = item || copyFrom;
+  if (src) {
+    f.elements.title.value = src.title;
+    // 複製のときは期限を入れ直してもらう（同じ期限のままだと同じものが2つになる）
+    f.elements.due.value = item ? item.due || "" : "";
+    if (type === "task") { f.elements.priority.value = src.priority; f.elements.memo.value = src.description || ""; }
+    else { f.elements.subject.value = src.subject; f.elements.memo.value = src.memo || ""; }
   }
   try {
     const subjects = await api(g("/subjects"));
     $("#subjects").replaceChildren(...subjects.map((s) => el("option", { value: s })));
   } catch { /* 候補が出ないだけ */ }
-  $("#editor").showModal();
-  (item ? f.elements.title : (type === "task" ? f.elements.title : f.elements.subject)).focus();
+  if (!$("#editor").open) $("#editor").showModal();
+  (copyFrom ? f.elements.due : item ? f.elements.title : (type === "task" ? f.elements.title : f.elements.subject)).focus();
 }
 
 $("#form").addEventListener("submit", async (e) => {
@@ -990,6 +1041,10 @@ $("#delete").addEventListener("click", async () => {
 });
 
 $("#cancel").addEventListener("click", () => $("#editor").close());
+$("#duplicate").addEventListener("click", () => {
+  const { type, item } = state.editing;
+  openEditor(type, null, item);
+});
 $("#kind-seg").addEventListener("click", (e) => { if (e.target.dataset.kind) setKind(e.target.dataset.kind); });
 $("#picker").addEventListener("change", (e) => { if (e.target.value) $("#form [name=due]").value = e.target.value.replace("T", " "); });
 $("#open-help").addEventListener("click", () => {

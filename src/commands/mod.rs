@@ -467,6 +467,16 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
             false,
         )
         .field(
+            "/hw copy",
+            "前の宿題・テストを複製して登録（`id` と新しい `due` を指定、内容・メモも変えられる）",
+            false,
+        )
+        .field(
+            "/hw share",
+            "これからの宿題・テストを LINE などに貼れるテキストで表示（`mine:true` で自分の未完了だけ）",
+            false,
+        )
+        .field(
             "/hw view ・ /hw edit ・ /hw delete",
             "詳細と完了した人の表示・編集・削除（削除は登録者か管理者）",
             false,
