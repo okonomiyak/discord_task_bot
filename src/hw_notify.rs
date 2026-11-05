@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDateTime, Timelike, Utc};
 use poise::serenity_prelude::{
     ChannelId, Colour, CreateAllowedMentions, CreateEmbed, CreateEmbedFooter, CreateMessage, Http,
     MessageFlags, RoleId, UserId,
@@ -12,7 +12,7 @@ use crate::{
     commands::{WebTab, done_buttons, web_button},
     db::Database,
     models::{Homework, HwKind, HwQuery, HwSettings, Task, WEEKDAYS_JA, mentions},
-    time::{DUE_FORMAT, due_to_utc, local_now, next_weekly, parse_time},
+    time::{DUE_FORMAT, due_to_utc, local_now, local_to_utc, next_weekly, parse_time, timezone},
 };
 
 /// 事前通知の最大（1週間）＋余裕
@@ -24,9 +24,46 @@ const SUMMARY_DAYS: i64 = 7;
 /// まとめ投稿に載せるテストの期間（日）
 const SUMMARY_EXAM_DAYS: i64 = 14;
 
+/// 夜中（QUIET_START 時〜翌 QUIET_END 時）は期限前の通知を送らない
+const QUIET_START: u32 = 22;
+const QUIET_END: u32 = 7;
+/// 夜中を避けて前の晩に送るときの時刻（QUIET_START の少し前）
+const QUIET_EARLY: (u32, u32) = (21, 30);
+
+/// 期限前の通知を送る時刻。期限の remind_before 秒前が夜中（22:00〜7:00）に当たるときは、
+/// 朝 7:00 にずらす。それだと期限に間に合わないときは、その前の晩の 21:30 に早める
+/// （例: 23:59 締め切りの「1日前」は前日の 23:59 ではなく当日の 7:00）
+pub fn notify_time(due: DateTime<Utc>, remind_before: i64) -> DateTime<Utc> {
+    let at = due - Duration::seconds(remind_before);
+    let tz = timezone();
+    let local = at.with_timezone(&tz).naive_local();
+    let hour = local.hour();
+    if (QUIET_END..QUIET_START).contains(&hour) {
+        return at;
+    }
+    // 夜中が始まった日（0〜7時なら前の日）
+    let night = if hour >= QUIET_START {
+        local.date()
+    } else {
+        local.date() - Duration::days(1)
+    };
+    let morning = (night + Duration::days(1))
+        .and_hms_opt(QUIET_END, 0, 0)
+        .and_then(|t| local_to_utc(t, tz));
+    if let Some(m) = morning
+        && m < due
+    {
+        return m;
+    }
+    night
+        .and_hms_opt(QUIET_EARLY.0, QUIET_EARLY.1, 0)
+        .and_then(|t| local_to_utc(t, tz))
+        .unwrap_or(at)
+}
+
 /// 今この通知を送るべきか
 ///
-/// - 通知時刻を過ぎていて、期限はまだ来ていない
+/// - 通知時刻（夜中ならずらした時刻）を過ぎていて、期限はまだ来ていない
 /// - チャンネル通知は、通知時刻より後に登録された宿題には送らない（登録時のメッセージで分かるため）
 fn should_notify(
     due: DateTime<Utc>,
@@ -35,7 +72,7 @@ fn should_notify(
     now: DateTime<Utc>,
     skip_if_registered_late: bool,
 ) -> bool {
-    let notify_at = due - Duration::seconds(remind_before);
+    let notify_at = notify_time(due, remind_before);
     if now < notify_at || now >= due {
         return false;
     }
@@ -97,7 +134,8 @@ pub fn suppress_link_previews(msg: CreateMessage, hide: bool) -> CreateMessage {
     }
 }
 
-/// 期限前の通知。settings を渡すとサーバーの通知ロールをメンションする（DM では None）。
+/// 期限前の通知。settings はサーバーの設定（DM では None）。通知ロールは
+/// 「登録・期限前の通知でもメンション」の設定のときだけ鳴らす。
 /// URL のカードはサーバーの設定に従い、DM では出さない
 fn reminder_message(
     list: &[Homework],
@@ -111,9 +149,10 @@ fn reminder_message(
         .and_then(|hw| web_button(web, Some(&hw.guild_id), WebTab::Todo));
     let lines: Vec<String> = list.iter().map(reminder_line).collect();
     let body = format!("{header}\n{}\n{footer}", lines.join("\n"));
+    let mention = settings.and_then(HwSettings::for_event_mention);
     let msg = CreateMessage::new()
-        .content(truncate_message(with_role_mention(settings, body)))
-        .allowed_mentions(role_allowed_mentions(settings))
+        .content(truncate_message(with_role_mention(mention, body)))
+        .allowed_mentions(role_allowed_mentions(mention))
         .components(done_buttons(list, true, link));
     suppress_link_previews(msg, settings.is_none_or(|s| s.hide_link_previews))
 }
@@ -456,6 +495,83 @@ mod tests {
             .and_utc()
     }
 
+    /// 日本時間（テストでは TIMEZONE 未設定なので Asia/Tokyo）
+    fn jst(s: &str) -> DateTime<Utc> {
+        local_to_utc(
+            chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M").unwrap(),
+            timezone(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn reminders_avoid_the_night() {
+        let hour = 3600;
+        let day = 24 * hour;
+        // 23:59 締め切りの「1日前」は、前日の 23:59 ではなく当日の朝 7:00
+        assert_eq!(
+            notify_time(jst("2025-10-10 23:59"), day),
+            jst("2025-10-10 07:00")
+        );
+        // 昼間ならそのまま
+        assert_eq!(
+            notify_time(jst("2025-10-10 08:30"), day),
+            jst("2025-10-09 08:30")
+        );
+        assert_eq!(
+            notify_time(jst("2025-10-10 23:00"), 3 * hour),
+            jst("2025-10-10 20:00")
+        );
+        // 朝 7:00 だと締め切りに間に合わないときは、前の晩の 21:30
+        assert_eq!(
+            notify_time(jst("2025-10-10 23:59"), hour),
+            jst("2025-10-10 21:30")
+        );
+        assert_eq!(
+            notify_time(jst("2025-10-10 06:00"), hour),
+            jst("2025-10-09 21:30")
+        );
+        // 夜中の 2:00 締め切りの「1日前」（前の日の 2:00）→ その朝 7:00
+        assert_eq!(
+            notify_time(jst("2025-10-10 02:00"), day),
+            jst("2025-10-09 07:00")
+        );
+
+        // should_notify もずらした時刻で判定する
+        let due = jst("2025-10-10 23:59");
+        let created = jst("2025-10-01 00:00").timestamp();
+        assert!(!should_notify(
+            due,
+            day,
+            created,
+            jst("2025-10-09 23:59"),
+            true
+        ));
+        assert!(!should_notify(
+            due,
+            day,
+            created,
+            jst("2025-10-10 06:59"),
+            true
+        ));
+        assert!(should_notify(
+            due,
+            day,
+            created,
+            jst("2025-10-10 07:00"),
+            true
+        ));
+        // 夜中に登録したものは、朝の通知時刻より前の登録なので通知される
+        let created_at_night = jst("2025-10-10 00:30").timestamp();
+        assert!(should_notify(
+            due,
+            day,
+            created_at_night,
+            jst("2025-10-10 07:00"),
+            true
+        ));
+    }
+
     #[test]
     fn notify_window() {
         let due = utc("2025-10-10 09:00");
@@ -610,6 +726,22 @@ mod tests {
             buttons[1]["url"],
             "https://hw.example.com/?guild=G&tab=todo"
         );
+        // 初期値（まとめ投稿だけ）では期限前の通知でロールを鳴らさない
+        assert!(json["content"].as_str().unwrap().starts_with("見出し"));
+        assert_eq!(json["allowed_mentions"]["roles"], serde_json::json!([]));
+        assert_eq!(json["allowed_mentions"]["parse"], serde_json::json!([]));
+
+        // 「登録・期限前の通知でも」の設定なら通知ロールだけ鳴らす
+        let mut all = settings.clone();
+        all.mention_all = true;
+        let json = serde_json::to_value(reminder_message(
+            &[item.clone()],
+            "見出し",
+            "フッター",
+            Some(&all),
+            None,
+        ))
+        .unwrap();
         assert!(
             json["content"]
                 .as_str()

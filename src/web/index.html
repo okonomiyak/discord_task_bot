@@ -790,7 +790,8 @@ function viewHelp(v) {
       ["期限前の通知", "期限の1日前（設定で変更・オフ可）に、通知チャンネルへまとめて投稿"],
       ["毎日のまとめ", "毎日 21:00（設定で変更・オフ可）に、今日・明日・1週間以内の宿題、2週間以内のテスト、未完了のタスク（期限切れ・1週間以内）を投稿"],
       ["自分への DM", "設定画面の「自分への DM 通知」で、未完了の宿題とテストを期限前に DM で受け取れる"],
-      ["通知ロール", "Discord の /hw role setup で作るロール。付けた人に、登録・期限前・まとめの通知でメンションが届く"],
+      ["期限前の通知の時間", "夜中（22:00〜7:00）には送らない。たとえば 23:59 締め切りの「1日前」は、前日の 23:59 ではなく当日の朝 7:00 に届く。朝だと間に合わないときは前の晩の 21:30 に送る"],
+      ["通知ロール", "Discord の /hw role setup で作るロール。初期値では毎日のまとめ投稿（載せるものがある日）だけでメンションが届く。設定で登録時・期限前の通知でも鳴らせる"],
       ["通知チャンネル", "未設定なら、宿題を登録したチャンネル（まとめは最後に登録したチャンネル）に投稿"],
       ["URL のカード", "内容に URL を書いても、通知などで大きなカード（プレビュー）に展開しない（初期値）。設定画面の「本文の URL のカード」で変えられる"],
     ])),
@@ -893,6 +894,9 @@ async function viewSettings(v) {
   const defaultTime = el("input", { type: "time", value: st.default_time });
   const remind = remindSelect("remind_before", st.remind_choices, st.remind_before);
   const hidePreviews = el("input", { type: "checkbox", checked: st.hide_link_previews });
+  const mentionAll = el("select", { name: "mention_all" },
+    el("option", { value: "0", selected: !st.mention_all }, "まとめ投稿だけ"),
+    el("option", { value: "1", selected: st.mention_all }, "登録・期限前の通知・まとめ投稿"));
   const saveServer = el("button", { type: "button", class: "btn primary" }, "保存");
   saveServer.addEventListener("click", () => saveSettings("/settings", "PATCH", {
     channel_id: channel.value,
@@ -900,6 +904,7 @@ async function viewSettings(v) {
     summary_time: summaryOn.checked ? summaryTime.value : "off",
     default_time: defaultTime.value,
     hide_link_previews: hidePreviews.checked,
+    mention_all: mentionAll.value === "1",
   }, saveServer));
   v.append(el("section", { class: "panel" },
     el("h2", {}, "サーバーの設定"),
@@ -916,6 +921,7 @@ async function viewSettings(v) {
     field("課題通知ロール",
       el("div", {}, st.notify_role ? `@${st.notify_role.name || "（削除されたロール）"}` : "なし"),
       "作成・変更は Discord の /hw role setup から（ロールの管理権限が必要）"),
+    field("通知ロールをメンションするとき", mentionAll, "まとめ投稿は載せるものがある日だけ。期限前の通知は夜中（22:00〜7:00）には送らない"),
     el("div", { class: "btns" }, saveServer)));
 
   // 自分の DM 通知

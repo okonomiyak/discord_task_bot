@@ -104,6 +104,11 @@ pub(super) fn init(conn: &Connection) -> rusqlite::Result<()> {
         "ALTER TABLE hw_settings ADD COLUMN show_link_previews INTEGER NOT NULL DEFAULT 0",
         [],
     );
+    // 0 = 通知ロールはまとめ投稿だけでメンション（初期値）、1 = 登録・期限前の通知でも
+    let _ = conn.execute(
+        "ALTER TABLE hw_settings ADD COLUMN role_mention_all INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
     Ok(())
 }
 
@@ -375,6 +380,9 @@ impl Database {
             }
             if let Some(hide) = patch.hide_link_previews {
                 s.hide_link_previews = hide;
+            }
+            if let Some(all) = patch.mention_all {
+                s.mention_all = all;
             }
             save_settings(&tx, &s)?;
             tx.commit()?;
@@ -686,7 +694,7 @@ fn latest_channel(conn: &Connection, guild_id: &str) -> rusqlite::Result<Option<
     .optional()
 }
 
-const SETTINGS_COLUMNS: &str = "guild_id, channel_id, remind_before, summary_time, default_time, last_summary_date, notify_role_id, show_link_previews";
+const SETTINGS_COLUMNS: &str = "guild_id, channel_id, remind_before, summary_time, default_time, last_summary_date, notify_role_id, show_link_previews, role_mention_all";
 
 fn settings(conn: &Connection, guild_id: &str) -> rusqlite::Result<HwSettings> {
     Ok(conn
@@ -701,8 +709,8 @@ fn settings(conn: &Connection, guild_id: &str) -> rusqlite::Result<HwSettings> {
 
 fn save_settings(conn: &Connection, s: &HwSettings) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT INTO hw_settings (guild_id, channel_id, remind_before, summary_time, default_time, last_summary_date, notify_role_id, show_link_previews)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO hw_settings (guild_id, channel_id, remind_before, summary_time, default_time, last_summary_date, notify_role_id, show_link_previews, role_mention_all)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
          ON CONFLICT (guild_id) DO UPDATE SET
             channel_id = excluded.channel_id,
             remind_before = excluded.remind_before,
@@ -710,7 +718,8 @@ fn save_settings(conn: &Connection, s: &HwSettings) -> rusqlite::Result<()> {
             default_time = excluded.default_time,
             last_summary_date = excluded.last_summary_date,
             notify_role_id = excluded.notify_role_id,
-            show_link_previews = excluded.show_link_previews",
+            show_link_previews = excluded.show_link_previews,
+            role_mention_all = excluded.role_mention_all",
         params![
             s.guild_id,
             s.channel_id,
@@ -719,7 +728,8 @@ fn save_settings(conn: &Connection, s: &HwSettings) -> rusqlite::Result<()> {
             s.default_time,
             s.last_summary_date,
             s.notify_role_id,
-            !s.hide_link_previews
+            !s.hide_link_previews,
+            s.mention_all
         ],
     )?;
     Ok(())
@@ -742,6 +752,7 @@ fn row_to_settings(row: &rusqlite::Row<'_>) -> rusqlite::Result<HwSettings> {
         last_summary_date: row.get(5)?,
         notify_role_id: row.get(6)?,
         hide_link_previews: !row.get::<_, bool>(7)?,
+        mention_all: row.get(8)?,
     })
 }
 
@@ -1113,8 +1124,9 @@ mod tests {
         let db = test_db();
         let s = db.hw_settings("G".into()).await.unwrap();
         assert_eq!(s, HwSettings::default_for("G".into()));
-        // URL のカードは初期値で出さない。ほかの設定を変えても変わらない
+        // URL のカードは初期値で出さない。通知ロールは初期値でまとめ投稿だけ
         assert!(s.hide_link_previews);
+        assert!(!s.mention_all);
         let s = db
             .hw_update_settings(
                 "G".into(),
@@ -1138,12 +1150,14 @@ mod tests {
                     default_time: None,
                     notify_role_id: Some(Some("777".into())),
                     hide_link_previews: Some(false),
+                    mention_all: Some(true),
                 },
             )
             .await
             .unwrap();
         assert_eq!(s.remind_before, None);
         assert!(!s.hide_link_previews);
+        assert!(s.mention_all);
         assert_eq!(s.role_mention().as_deref(), Some("<@&777>"));
         assert_eq!(db.hw_settings("G".into()).await.unwrap(), s);
         assert_eq!(
