@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use poise::serenity_prelude::{self as serenity, ChannelId, CreateMessage, Http, Message};
+use poise::serenity_prelude::{ChannelId, CreateMessage, Http};
 
 use crate::{
     Error,
@@ -40,14 +40,15 @@ async fn send_notice(
     channel_id: ChannelId,
     task: &Task,
     content: String,
-) -> serenity::Result<Message> {
+) -> Result<(), Error> {
     let hide = db
         .hw_settings(task.guild_id.clone())
         .await
         .map(|s| s.hide_link_previews)
         .unwrap_or(true);
     let msg = crate::hw_notify::suppress_link_previews(CreateMessage::new().content(content), hide);
-    channel_id.send_message(http, msg).await
+    channel_id.send_message(http, msg).await?;
+    Ok(())
 }
 
 fn channel_of(task: &Task) -> Option<ChannelId> {
