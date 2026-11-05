@@ -4,7 +4,10 @@ use poise::serenity_prelude::{
     CreateInteractionResponseMessage, EditRole, RoleId,
 };
 
-use super::{build_pages, due_help, parse_due_with, reply_ephemeral, send_paginated, truncate};
+use super::{
+    WebTab, build_pages, ctx_web_button, due_help, gcal_button, link_row, parse_due_with,
+    reply_ephemeral, send_paginated, truncate,
+};
 use crate::{
     Context, Data, Error,
     db::HwEdit,
@@ -190,12 +193,19 @@ fn button_id(prefix: &str, hw: &Homework) -> String {
     format!("{prefix}:{}:{}", hw.guild_id, hw.id)
 }
 
-/// 宿題の「完了」ボタン（テストには付けない、最大25個）
-pub fn done_buttons(list: &[Homework], with_label: bool) -> Vec<CreateActionRow> {
-    let buttons: Vec<CreateButton> = list
+/// 宿題の「完了」ボタン（テストには付けない）。links（「Web で開く」など）を渡すと最後に付ける。
+/// メッセージのボタンは最大25個なので、超える分は省く
+pub fn done_buttons(
+    list: &[Homework],
+    with_label: bool,
+    links: impl IntoIterator<Item = CreateButton>,
+) -> Vec<CreateActionRow> {
+    let links: Vec<CreateButton> = links.into_iter().collect();
+    let limit = 25usize.saturating_sub(links.len());
+    let mut buttons: Vec<CreateButton> = list
         .iter()
         .filter(|hw| hw.kind == HwKind::Homework)
-        .take(25)
+        .take(limit)
         .map(|hw| {
             let label = if with_label {
                 truncate(&format!("完了 #{} {}", hw.id, hw.subject), 80)
@@ -208,6 +218,7 @@ pub fn done_buttons(list: &[Homework], with_label: bool) -> Vec<CreateActionRow>
                 .label(label)
         })
         .collect();
+    buttons.extend(links);
     buttons
         .chunks(5)
         .map(|row| CreateActionRow::Buttons(row.to_vec()))
@@ -334,6 +345,17 @@ async fn ac_homework(ctx: Context<'_>, partial: &str, query: HwQuery) -> Vec<Aut
         .collect()
 }
 
+/// 1件の宿題・テストに付けるリンク（Googleカレンダーに追加・Web で開く）
+fn hw_links(ctx: Context<'_>, hw: &Homework) -> Vec<CreateButton> {
+    [
+        gcal_button(hw, ctx.data().web_url.as_deref()),
+        ctx_web_button(ctx, WebTab::from(hw.kind)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 fn recent_from() -> String {
     (local_now() - chrono::Duration::days(TODO_OVERDUE_DAYS))
         .format(DUE_FORMAT)
@@ -408,8 +430,8 @@ fn repeat_label(r: &HwRepeat) -> String {
 #[poise::command(
     slash_command,
     subcommands(
-        "add", "todo", "list", "done", "undo", "view", "edit", "delete", "exam", "repeat", "stats",
-        "settings", "notify", "role"
+        "add", "copy", "todo", "list", "share", "done", "undo", "view", "edit", "delete", "exam",
+        "repeat", "stats", "settings", "notify", "role"
     )
 )]
 pub async fn hw(_ctx: Context<'_>) -> Result<(), Error> {
@@ -500,8 +522,14 @@ async fn register(
                     ),
                 ),
             )
-            .components(done_buttons(std::slice::from_ref(&hw), false)),
-        HwKind::Exam => base.embed(hw_embed(&hw, "📝 テストを登録しました", Colour(0xE74C3C))),
+            .components(done_buttons(
+                std::slice::from_ref(&hw),
+                false,
+                hw_links(ctx, &hw),
+            )),
+        HwKind::Exam => base
+            .embed(hw_embed(&hw, "📝 テストを登録しました", Colour(0xE74C3C)))
+            .components(link_row(hw_links(ctx, &hw))),
     };
     ctx.send(reply).await?;
     Ok(())
@@ -550,7 +578,7 @@ pub async fn todo(
             }
         },
     );
-    send_paginated(ctx, pages, true).await
+    send_paginated(ctx, pages, true, ctx_web_button(ctx, WebTab::Todo)).await
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -617,7 +645,7 @@ async fn show_list(
         HwKind::Exam => Colour(0xE74C3C),
     };
     let pages = build_pages(&title, colour, &list, |hw| hw_field(hw, &me));
-    send_paginated(ctx, pages, false).await
+    send_paginated(ctx, pages, false, ctx_web_button(ctx, WebTab::from(kind))).await
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -704,7 +732,135 @@ pub async fn view(
     ctx.send(
         poise::CreateReply::default()
             .embed(embed)
-            .components(done_buttons(std::slice::from_ref(&hw), false)),
+            .components(done_buttons(
+                std::slice::from_ref(&hw),
+                false,
+                hw_links(ctx, &hw),
+            )),
+    )
+    .await?;
+    Ok(())
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// /hw copy ・ /hw share
+// ────────────────────────────────────────────────────────────────────────────
+
+/// 前の宿題・テストを複製して登録する（期限だけ変えれば OK）
+#[poise::command(slash_command)]
+pub async fn copy(
+    ctx: Context<'_>,
+    #[description = "複製する宿題・テスト（入力すると候補が出ます）"]
+    #[autocomplete = "ac_any"]
+    id: i64,
+    #[description = "新しい期限・日時（例: 来週の分なら 金曜 / 12/5）"] due: String,
+    #[description = "内容を変える（省略時は元と同じ）"]
+    #[max_length = 100]
+    title: Option<String>,
+    #[description = "メモを変える（省略時は元と同じ）"]
+    #[max_length = 1000]
+    memo: Option<String>,
+) -> Result<(), Error> {
+    let guild_id = require_guild!(ctx);
+    let Some(src) = ctx.data().db.hw_get(id, guild_id).await? else {
+        return reply_hw_not_found(ctx, id).await;
+    };
+    register(
+        ctx,
+        src.kind,
+        src.subject,
+        title.unwrap_or(src.title),
+        due,
+        memo.or(src.description),
+    )
+    .await
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, poise::ChoiceParameter)]
+pub enum ShareKind {
+    #[name = "宿題とテスト"]
+    All,
+    #[name = "宿題だけ"]
+    Homework,
+    #[name = "テストだけ"]
+    Exam,
+}
+
+/// これからの宿題・テストを、LINE などに貼れるテキストで表示する（自分にだけ表示）
+#[poise::command(slash_command)]
+pub async fn share(
+    ctx: Context<'_>,
+    #[description = "載せるもの (デフォルト: 宿題とテスト)"] kind: Option<ShareKind>,
+    #[description = "宿題は自分が終わっていないものだけ (デフォルト: false)"] mine: Option<bool>,
+    #[description = "科目で絞り込み"]
+    #[autocomplete = "ac_subject"]
+    subject: Option<String>,
+) -> Result<(), Error> {
+    let guild_id = require_guild!(ctx);
+    let guild_id_for_settings = guild_id.clone();
+    let kind = kind.unwrap_or(ShareKind::All);
+    let db = &ctx.data().db;
+    let base = HwQuery {
+        subject,
+        due_from: Some(local_now().format(DUE_FORMAT).to_string()),
+        ..Default::default()
+    };
+    let homework = if kind == ShareKind::Exam {
+        vec![]
+    } else {
+        let query = HwQuery {
+            kind: Some(HwKind::Homework),
+            not_done_by: mine.unwrap_or(false).then(|| ctx.author().id.to_string()),
+            ..base.clone()
+        };
+        db.hw_list(guild_id.clone(), query).await?
+    };
+    let exams = if kind == ShareKind::Homework {
+        vec![]
+    } else {
+        let query = HwQuery {
+            kind: Some(HwKind::Exam),
+            ..base
+        };
+        db.hw_list(guild_id, query).await?
+    };
+
+    let text = crate::share::share_text(&homework, &exams);
+    if text.is_empty() {
+        reply_ephemeral(ctx, "これからの宿題・テストはありません。").await?;
+        return Ok(());
+    }
+    // 長押し（PC はドラッグで選択）でコピーできるよう、本文だけにする。
+    // 内容に URL があってもカードを出さない設定のときは、Discord に直接応答してフラグを付ける
+    // （poise の返信ではメッセージのフラグを指定できない）
+    let hide = db
+        .hw_settings(guild_id_for_settings)
+        .await?
+        .hide_link_previews;
+    let components = link_row(ctx_web_button(ctx, WebTab::Todo));
+    if hide && let poise::Context::Application(actx) = ctx {
+        let mut flags = serenity::InteractionResponseFlags::EPHEMERAL;
+        flags |= serenity::InteractionResponseFlags::SUPPRESS_EMBEDS;
+        actx.interaction
+            .create_response(
+                ctx.serenity_context(),
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(text)
+                        .allowed_mentions(CreateAllowedMentions::new())
+                        .components(components)
+                        .flags(flags),
+                ),
+            )
+            .await?;
+        return Ok(());
+    }
+    ctx.send(
+        poise::CreateReply::default()
+            .content(text)
+            .allowed_mentions(CreateAllowedMentions::new())
+            .components(components)
+            .ephemeral(true),
     )
     .await?;
     Ok(())
@@ -932,7 +1088,11 @@ pub async fn repeat_add(
             format!("#{} 期限: {}", hw.id, format_due(Some(&hw.due_date))),
             false,
         );
-        reply = reply.components(done_buttons(std::slice::from_ref(hw), false));
+        reply = reply.components(done_buttons(
+            std::slice::from_ref(hw),
+            false,
+            ctx_web_button(ctx, WebTab::Settings),
+        ));
     }
     ctx.send(reply.embed(embed)).await?;
     Ok(())
@@ -960,7 +1120,7 @@ pub async fn repeat_list(ctx: Context<'_>) -> Result<(), Error> {
             ),
         )
     });
-    send_paginated(ctx, pages, false).await
+    send_paginated(ctx, pages, false, ctx_web_button(ctx, WebTab::Settings)).await
 }
 
 /// 毎週の宿題を止める（登録済みの宿題は残ります）
@@ -1101,6 +1261,7 @@ pub async fn stats(
     ctx.send(
         poise::CreateReply::default()
             .embed(embed)
+            .components(link_row(ctx_web_button(ctx, WebTab::Todo)))
             .ephemeral(!public.unwrap_or(false)),
     )
     .await?;
@@ -1358,10 +1519,27 @@ fn settings_embed(s: &HwSettings) -> CreateEmbed {
             &s.default_time,
             true,
         )
+        .field(
+            "本文の URL のカード",
+            if s.hide_link_previews {
+                "出さない"
+            } else {
+                "出す"
+            },
+            true,
+        )
         .footer(serenity::CreateEmbedFooter::new(format!(
             "時刻は {} / 個人の DM 通知は /hw notify で設定",
             timezone()
         )))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, poise::ChoiceParameter)]
+pub enum LinkPreviewChoice {
+    #[name = "出さない"]
+    Hide,
+    #[name = "出す"]
+    Show,
 }
 
 /// サーバーの宿題の通知・まとめ投稿を設定する（何も指定しないと現在の設定を表示）
@@ -1376,6 +1554,8 @@ pub async fn settings(
         String,
     >,
     #[description = "期限の時刻を省略したときの時刻（例: 08:30）"] default_time: Option<String>,
+    #[description = "通知などの本文に入った URL をカードで表示するか（初期値: 出さない）"]
+    link_preview: Option<LinkPreviewChoice>,
 ) -> Result<(), Error> {
     let guild_id = require_guild!(ctx);
     let db = &ctx.data().db;
@@ -1418,12 +1598,14 @@ pub async fn settings(
         summary_time,
         default_time,
         notify_role_id: None,
+        hide_link_previews: link_preview.map(|c| c == LinkPreviewChoice::Hide),
     };
 
     let changed = patch.channel_id.is_some()
         || patch.remind_before.is_some()
         || patch.summary_time.is_some()
-        || patch.default_time.is_some();
+        || patch.default_time.is_some()
+        || patch.hide_link_previews.is_some();
     if !changed {
         let current = db.hw_settings(guild_id).await?;
         ctx.send(poise::CreateReply::default().embed(settings_embed(&current)))

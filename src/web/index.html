@@ -4,6 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>宿題ボード</title>
+<meta name="description" content="Discord の宿題・テスト・タスクをブラウザで確認して、そのまま完了にできます。">
+<meta name="theme-color" content="#5865f2">
+<!-- リンクを Discord・LINE・X などに貼ったときのカード（__BASE_URL__ はサーバーが WEB_BASE_URL に置き換える） -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="宿題ボード">
+<meta property="og:title" content="宿題ボード">
+<meta property="og:description" content="Discord の宿題・テスト・タスクをブラウザで確認して、そのまま完了にできます。">
+<meta property="og:url" content="__BASE_URL__/">
+<meta property="og:image" content="__BASE_URL__/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="宿題ボード: 宿題のカードが並んだ画面">
+<meta property="og:locale" content="ja_JP">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' fill='%235865f2'/><path d='M8 16l6 6 10-12' fill='none' stroke='white' stroke-width='4'/></svg>">
 <style>
   :root {
@@ -81,6 +96,8 @@
 
   .done-btn { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
   .done-btn:disabled { text-decoration: none; cursor: default; }
+  .gcal { color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
+  .gcal:hover { color: var(--accent); }
   .people { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .person { display: inline-flex; align-items: center; gap: 5px; background: var(--surface-2); border-radius: 0; padding: 2px 10px 2px 2px; font-size: 13px; max-width: 100%; }
   .person img, .person .noimg { width: 22px; height: 22px; border-radius: 50%; flex: none; background: var(--border); }
@@ -142,6 +159,8 @@
   .seg button.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
   label.field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
   .field input, .field textarea, .field select { color: var(--text); padding: 9px 10px; border: 1px solid var(--border); border-radius: 0; background: var(--bg); font-weight: 400; font-size: 16px; }
+  .field .toggle { white-space: nowrap; color: var(--text); font-weight: 400; font-size: 15px; }
+  .field .toggle input[type=checkbox] { width: auto; flex: none; padding: 0; }
   .field textarea { min-height: 70px; resize: vertical; }
   .quick { display: flex; flex-wrap: wrap; gap: 6px; }
   .quick button { border: 1px solid var(--border); background: var(--surface-2); border-radius: 0; padding: 3px 10px; font-size: 13px; cursor: pointer; }
@@ -152,6 +171,9 @@
   .btn { border: 0; border-radius: 0; padding: 9px 16px; font-weight: 700; cursor: pointer; background: var(--surface-2); }
   .btn.primary { background: var(--accent); color: var(--accent-text); }
   .btn.danger { background: none; color: var(--danger); margin-right: auto; }
+  .btn.small { padding: 6px 10px; font-size: 13px; font-weight: 600; color: var(--text); border: 1px solid var(--border); background: var(--surface); }
+  .toolbar > span:first-child { white-space: nowrap; }
+  .toolbar-right { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: flex-end; }
   .error { color: var(--danger); font-size: 13px; min-height: 1em; }
 
   .stats { background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 14px; margin-bottom: 8px; box-shadow: var(--shadow); }
@@ -301,6 +323,7 @@
     <div class="error" id="form-error"></div>
     <div class="btns">
       <button type="button" class="btn danger" id="delete" hidden>削除</button>
+      <button type="button" class="btn" id="duplicate" hidden title="同じ内容で新しく登録する（期限は入れ直す）">複製</button>
       <button type="button" class="btn" id="cancel">キャンセル</button>
       <button type="submit" class="btn primary" id="save">保存</button>
     </div>
@@ -386,6 +409,41 @@ function dueEl(unix, label = "期限") {
 }
 function empty(text) { return el("div", { class: "empty" }, text); }
 
+/// LINE などに貼る一覧のテキスト（Discord の /hw share と同じ書き方: src/share.rs）
+function shareDue(due) {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(due || "");
+  if (!m) return due || "";
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return `${+m[2]}/${+m[3]}(${WD[d.getDay()]}) ${m[4]}:${m[5]}`;
+}
+function shareText(homework, exams) {
+  const out = [];
+  for (const [heading, list, until] of [["【宿題】", homework, true], ["【テスト】", exams, false]]) {
+    if (!list.length) continue;
+    if (out.length) out.push("");
+    out.push(heading, ...list.map((h) => `・${h.subject} ${h.title}（${shareDue(h.due)}${until ? "まで" : ""}）`));
+  }
+  return out.join("\n");
+}
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    // http で開いているときなど、クリップボード API が使えないとき
+    const ta = el("textarea", { style: "position:fixed;top:0;left:0;opacity:0" });
+    ta.value = text; document.body.append(ta); ta.select();
+    const ok = document.execCommand("copy"); ta.remove();
+    if (!ok) { toast("コピーできませんでした"); return; }
+  }
+  toast("コピーしました。LINE などに貼り付けられます");
+}
+/// 「テキストでコピー」ボタン（何もなければ出さない）
+function copyButton(homework, exams) {
+  if (!homework.length && !exams.length) return null;
+  return el("button", { type: "button", class: "btn small", title: "LINE などに貼れる文章でコピー",
+    onclick: () => copyText(shareText(homework, exams)) }, "テキストでコピー");
+}
+
 /// 科目名から色相を決める（同じ科目はいつも同じ色）。
 /// よくある科目は見分けやすい色に固定し、それ以外は名前から12色のどれかに振り分ける
 const SUBJECT_HUES = [
@@ -460,6 +518,9 @@ function hwCard(hw) {
           onclick: (e) => toggleDoneBy(e.currentTarget, hw),
         }, `完了 ${hw.done_count}人`),
         isExam ? null : classRate(hw),
+        // 押すと Google カレンダーの「予定を作成」画面が開き、保存したときだけ追加される
+        hw.gcal_url ? el("a", { class: "gcal", href: hw.gcal_url, target: "_blank", rel: "noopener noreferrer",
+          title: "Google カレンダーの予定作成画面を開く（保存したときだけ追加されます）" }, "カレンダーに追加") : null,
         el("span", {}, `#${hw.id}`))),
     el("div", { class: "actions" },
       editButton(() => openEditor(hw.kind, hw))));
@@ -573,6 +634,8 @@ async function viewTodo(v) {
   const soon = exams.filter((e) => e.due_unix - now < 14 * 86400);
 
   const main = el("div", { class: "todo-main" });
+  const copy = copyButton(list, soon);
+  if (copy) main.append(el("div", { class: "toolbar" }, el("span", {}, "自分がまだ終わっていない宿題"), copy));
   if (!list.length) main.append(empty("未完了の宿題はありません"));
   if (over.length) main.append(el("div", { class: "section-title" }, `期限切れ（${over.length}）`), cardList(over, hwCard));
   if (rest.length) main.append(el("div", { class: "section-title" }, `これから（${rest.length}）`), cardList(rest, hwCard));
@@ -583,9 +646,11 @@ async function viewTodo(v) {
 }
 
 async function viewHw(v, kind) {
-  v.append(el("div", { class: "toolbar" }, el("span", {}, kind === "exam" ? "テストの予定" : "みんなの宿題"), pastToggle()));
   const scope = state.past ? "past" : "upcoming";
   const list = await api(g(`/homework?scope=${scope}&kind=${kind}`));
+  const copy = kind === "exam" ? copyButton([], list) : copyButton(list, []);
+  v.append(el("div", { class: "toolbar" }, el("span", {}, kind === "exam" ? "テストの予定" : "みんなの宿題"),
+    el("div", { class: "toolbar-right" }, pastToggle(), copy)));
   if (!list.length) v.append(empty(kind === "exam" ? "テストの予定はありません" : "宿題はありません。＋ から追加できます"));
   v.append(cardList(list, hwCard));
 }
@@ -704,8 +769,11 @@ function viewHelp(v) {
       ["クラス ○%", "宿題の完了を記録したことがある人のうち、終わった人の割合"],
       ["編集", "右の鉛筆。科目・内容・期限・メモを変えられる"],
       ["削除", "編集画面の「削除」。宿題を消せるのは登録した人か、メッセージの管理権限がある人だけ"],
+      ["複製", "編集画面の「複製」。科目・内容・メモが入った状態で新しく追加できる。期限だけ入れ直す"],
+      ["テキストでコピー", "やること・宿題・テストの画面の上にあるボタン。表示している一覧を「・数学 ワーク p.10（11/6(木) 08:30まで）」のような文章でコピーし、LINE などに貼れる"],
       ["毎週", "毎週の宿題から自動で登録されたもの。期限が過ぎると翌週の分が登録される"],
       ["メモのリンク", "メモに書いた https:// で始まる URL は押すと開ける"],
+      ["カレンダーに追加", "Google カレンダーの予定作成画面が、内容と期限が入った状態で開く。そこで「保存」を押したときだけ自分のカレンダーに追加される（勝手に同期はしない）。宿題は期限から 30 分、テストは 1 時間の予定になる"],
     ])),
 
     helpSection("help-due", "期限の書き方",
@@ -724,6 +792,7 @@ function viewHelp(v) {
       ["自分への DM", "設定画面の「自分への DM 通知」で、未完了の宿題とテストを期限前に DM で受け取れる"],
       ["通知ロール", "Discord の /hw role setup で作るロール。付けた人に、登録・期限前・まとめの通知でメンションが届く"],
       ["通知チャンネル", "未設定なら、宿題を登録したチャンネル（まとめは最後に登録したチャンネル）に投稿"],
+      ["URL のカード", "内容に URL を書いても、通知などで大きなカード（プレビュー）に展開しない（初期値）。設定画面の「本文の URL のカード」で変えられる"],
     ])),
 
     helpSection("help-faq", "よくある質問", defs([
@@ -742,6 +811,8 @@ function viewHelp(v) {
         ["/hw list", "宿題の一覧（past:true で期限が過ぎたもの）"],
         ["/hw done ・ /hw undo", "自分の分を完了にする・取り消す"],
         ["/hw view ・ edit ・ delete", "詳細・編集・削除"],
+        ["/hw copy", "前の宿題・テストを複製して登録（新しい期限を指定）"],
+        ["/hw share", "これからの宿題・テストを LINE などに貼れる文章で表示"],
         ["/hw exam add ・ list", "テストの登録・一覧"],
         ["/hw repeat add ・ list ・ delete", "毎週の宿題"],
         ["/hw stats", "自分の達成率（public:true でみんなに見せる）"],
@@ -750,8 +821,10 @@ function viewHelp(v) {
         ["/hw role setup ・ remove", "課題通知ロール（ロールの管理権限が必要）"],
         ["/task add ・ list ・ search ・ view", "タスクの登録・一覧・検索・詳細"],
         ["/task status ・ assign ・ edit ・ delete", "ステータス変更・担当者・編集・削除"],
+        ["/web", "このサイトのリンクを表示（public:true でみんなに見せる）"],
         ["/help", "コマンド一覧を Discord に表示"],
-      ])),
+      ]),
+      el("p", { class: "hint" }, "登録・通知・まとめ投稿・一覧のメッセージにある「Web で開く」ボタンからも、このサイトのそのサーバーの画面に直接来られます。")),
   );
 }
 
@@ -819,12 +892,14 @@ async function viewSettings(v) {
   summaryOn.addEventListener("change", () => { summaryTime.disabled = !summaryOn.checked; });
   const defaultTime = el("input", { type: "time", value: st.default_time });
   const remind = remindSelect("remind_before", st.remind_choices, st.remind_before);
+  const hidePreviews = el("input", { type: "checkbox", checked: st.hide_link_previews });
   const saveServer = el("button", { type: "button", class: "btn primary" }, "保存");
   saveServer.addEventListener("click", () => saveSettings("/settings", "PATCH", {
     channel_id: channel.value,
     remind_before: Number(remind.value),
     summary_time: summaryOn.checked ? summaryTime.value : "off",
     default_time: defaultTime.value,
+    hide_link_previews: hidePreviews.checked,
   }, saveServer));
   v.append(el("section", { class: "panel" },
     el("h2", {}, "サーバーの設定"),
@@ -835,6 +910,9 @@ async function viewSettings(v) {
       field("時刻を省略したときの期限", defaultTime)),
     field("毎日のまとめ投稿",
       el("div", { class: "row" }, el("label", { class: "toggle" }, summaryOn, "オン"), summaryTime)),
+    field("本文の URL のカード",
+      el("div", { class: "row" }, el("label", { class: "toggle" }, hidePreviews, "出さない")),
+      "通知や Web から登録したときの投稿で、内容に書かれた URL がカード（プレビュー）に展開されないようにする"),
     field("課題通知ロール",
       el("div", {}, st.notify_role ? `@${st.notify_role.name || "（削除されたロール）"}` : "なし"),
       "作成・変更は Discord の /hw role setup から（ロールの管理権限が必要）"),
@@ -937,26 +1015,30 @@ function quickDates() {
     q.append(el("button", { type: "button", onclick: () => { $("#form [name=due]").value = w.length === 1 ? `${w}曜` : w; } }, w.length === 1 ? `${w}曜` : w)));
 }
 
-async function openEditor(type, item = null) {
+/// item を渡すと編集、copyFrom を渡すとその内容を入れた状態で新しく追加（複製）
+async function openEditor(type, item = null, copyFrom = null) {
   state.editing = { type, item };
   const f = $("#form");
   f.reset(); $("#form-error").textContent = ""; $("#picker").value = "";
   $("#kind-seg").hidden = !!item;
-  $("#form-title").textContent = item ? `#${item.id} を編集` : "追加";
+  $("#form-title").textContent = item ? `#${item.id} を編集` : copyFrom ? `#${copyFrom.id} を複製して追加` : "追加";
   $("#delete").hidden = !item || (type !== "task" && !item.can_delete);
+  $("#duplicate").hidden = !item;
   setKind(type === "task" ? "task" : type);
-  if (item) {
-    f.elements.title.value = item.title;
-    f.elements.due.value = item.due || "";
-    if (type === "task") { f.elements.priority.value = item.priority; f.elements.memo.value = item.description || ""; }
-    else { f.elements.subject.value = item.subject; f.elements.memo.value = item.memo || ""; }
+  const src = item || copyFrom;
+  if (src) {
+    f.elements.title.value = src.title;
+    // 複製のときは期限を入れ直してもらう（同じ期限のままだと同じものが2つになる）
+    f.elements.due.value = item ? item.due || "" : "";
+    if (type === "task") { f.elements.priority.value = src.priority; f.elements.memo.value = src.description || ""; }
+    else { f.elements.subject.value = src.subject; f.elements.memo.value = src.memo || ""; }
   }
   try {
     const subjects = await api(g("/subjects"));
     $("#subjects").replaceChildren(...subjects.map((s) => el("option", { value: s })));
   } catch { /* 候補が出ないだけ */ }
-  $("#editor").showModal();
-  (item ? f.elements.title : (type === "task" ? f.elements.title : f.elements.subject)).focus();
+  if (!$("#editor").open) $("#editor").showModal();
+  (copyFrom ? f.elements.due : item ? f.elements.title : (type === "task" ? f.elements.title : f.elements.subject)).focus();
 }
 
 $("#form").addEventListener("submit", async (e) => {
@@ -988,6 +1070,10 @@ $("#delete").addEventListener("click", async () => {
 });
 
 $("#cancel").addEventListener("click", () => $("#editor").close());
+$("#duplicate").addEventListener("click", () => {
+  const { type, item } = state.editing;
+  openEditor(type, null, item);
+});
 $("#kind-seg").addEventListener("click", (e) => { if (e.target.dataset.kind) setKind(e.target.dataset.kind); });
 $("#picker").addEventListener("change", (e) => { if (e.target.value) $("#form [name=due]").value = e.target.value.replace("T", " "); });
 $("#open-help").addEventListener("click", () => {
@@ -1012,14 +1098,34 @@ $("#logout").addEventListener("click", async () => { await fetch("/logout", { me
 WIDE.addEventListener("change", () => { if (state.me && state.tab === "calendar") render(); });
 window.addEventListener("focus", () => { if (state.me && !$("#editor").open) render(); });
 
+// Discord の「Web で開く」ボタンから来たとき（/?guild=…&tab=…）は、そのサーバーと画面を開く。
+// ログインすると URL の指定が消えるので、ログインが終わるまで sessionStorage に残しておく
+const LINK_TABS = ["todo", "homework", "exam", "tasks", "calendar", "settings", "help"];
+function takeLink() {
+  const q = new URLSearchParams(location.search);
+  if (q.has("guild") || q.has("tab")) {
+    const link = { guild: q.get("guild") || "", tab: q.get("tab") || "" };
+    try { sessionStorage.setItem("link", JSON.stringify(link)); } catch {}
+    history.replaceState(null, "", location.pathname);
+    return link;
+  }
+  try { return JSON.parse(sessionStorage.getItem("link") || "null"); } catch { return null; }
+}
+
 (async function init() {
   quickDates();
+  const link = takeLink();
   try { state.me = await api("/api/me"); } catch { return; }
+  try { sessionStorage.removeItem("link"); } catch {}
   $("#login").hidden = true; $("#app").hidden = false;
   if (state.me.avatar_url) $("#avatar").src = state.me.avatar_url; else $("#avatar").hidden = true;
   $("#avatar").title = state.me.name;
   $("#me-name").textContent = state.me.name;
   const guilds = state.me.guilds;
+  if (link) {
+    if (guilds.some((gd) => gd.id === link.guild)) { state.guild = link.guild; localStorage.setItem("guild", state.guild); }
+    if (LINK_TABS.includes(link.tab)) { state.tab = link.tab; localStorage.setItem("tab", state.tab); }
+  }
   $("#guild").replaceChildren(...guilds.map((gd) => el("option", { value: gd.id }, gd.name)));
   if (!guilds.some((gd) => gd.id === state.guild)) state.guild = guilds[0]?.id || "";
   $("#guild").value = state.guild;

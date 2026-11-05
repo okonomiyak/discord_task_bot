@@ -1,8 +1,10 @@
 mod commands;
 mod db;
+mod gcal;
 mod hw_notify;
 mod models;
 mod reminder;
+mod share;
 mod stats;
 mod time;
 mod web;
@@ -14,6 +16,8 @@ use poise::serenity_prelude as serenity;
 #[derive(Debug)]
 pub struct Data {
     pub db: db::Database,
+    /// Web ダッシュボードの URL（WEB_BASE_URL、無効なら None）。「Web で開く」ボタンに使う
+    pub web_url: Option<String>,
 }
 
 pub type Error = Box<dyn std::error::Error + Send + Sync>;
@@ -72,11 +76,20 @@ async fn main() {
     let db_for_reminder = database.clone();
     let db_for_web = database.clone();
 
+    // Web ダッシュボード（DISCORD_CLIENT_ID などが設定されているときだけ）
+    let web_config = web::WebConfig::from_env();
+    let web_url = match &web_config {
+        Some(Ok(config)) => Some(config.base_url.clone()),
+        _ => None,
+    };
+    let web_url_for_reminder = web_url.clone();
+
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
             commands: vec![
                 commands::task(),
                 commands::hw(),
+                commands::web(),
                 commands::now(),
                 commands::help(),
             ],
@@ -148,7 +161,10 @@ async fn main() {
                     poise::builtins::register_globally(ctx, commands).await?;
                     println!("コマンドをグローバルに登録しました（反映まで最大1時間）");
                 }
-                Ok(Data { db: database })
+                Ok(Data {
+                    db: database,
+                    web_url,
+                })
             })
         })
         .build();
@@ -161,10 +177,13 @@ async fn main() {
         .expect("Discord クライアントの作成に失敗しました");
 
     // リマインダー・期限切れ通知のバックグラウンドタスク（60秒ごとにチェック）
-    tokio::spawn(reminder::run(db_for_reminder, Arc::clone(&client.http)));
+    tokio::spawn(reminder::run(
+        db_for_reminder,
+        Arc::clone(&client.http),
+        web_url_for_reminder,
+    ));
 
-    // Web ダッシュボード（DISCORD_CLIENT_ID などが設定されているときだけ）
-    match web::WebConfig::from_env() {
+    match web_config {
         Some(Ok(config)) => {
             let state = web::AppState::new(
                 db_for_web,

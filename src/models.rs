@@ -294,6 +294,8 @@ pub struct HwSettings {
     pub last_summary_date: Option<String>,
     /// 課題の通知でメンションするロール
     pub notify_role_id: Option<String>,
+    /// 通知などの本文に入った URL のカード（埋め込み）を出さない（初期値: オン）
+    pub hide_link_previews: bool,
 }
 
 impl HwSettings {
@@ -319,6 +321,7 @@ impl HwSettings {
             default_time: Self::DEFAULT_TIME.to_string(),
             last_summary_date: None,
             notify_role_id: None,
+            hide_link_previews: true,
         }
     }
 
@@ -338,4 +341,5 @@ pub struct HwSettingsPatch {
     pub default_time: Option<String>,
     /// Some(None) で通知ロールを解除
     pub notify_role_id: Option<Option<String>>,
+    pub hide_link_previews: Option<bool>,
 }

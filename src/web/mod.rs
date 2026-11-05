@@ -108,6 +108,8 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index))
+        .route("/og.png", get(og_image))
+        .route("/apple-touch-icon.png", get(touch_icon))
         .route("/login", get(login))
         .route("/auth/callback", get(callback))
         .route("/logout", post(logout))
@@ -260,8 +262,39 @@ fn random_token() -> String {
 // ページ・ログイン
 // ────────────────────────────────────────────────────────────────────────────
 
-async fn index() -> Html<&'static str> {
-    Html(include_str!("index.html"))
+/// トップページ。OGP の URL（og:url・og:image）は絶対 URL が必要なので、
+/// `__BASE_URL__` を WEB_BASE_URL に置き換えて返す
+async fn index(State(state): State<AppState>) -> Html<String> {
+    Html(index_html(&state.config.base_url))
+}
+
+fn index_html(base_url: &str) -> String {
+    let escaped = base_url
+        .replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    include_str!("index.html").replace("__BASE_URL__", &escaped)
+}
+
+// OGP 画像とホーム画面のアイコン（作り直すときは assets/render-og.js）
+async fn og_image() -> Response {
+    png(include_bytes!("og.png"))
+}
+
+async fn touch_icon() -> Response {
+    png(include_bytes!("apple-touch-icon.png"))
+}
+
+fn png(bytes: &'static [u8]) -> Response {
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        bytes,
+    )
+        .into_response()
 }
 
 async fn login(State(state): State<AppState>) -> Response {

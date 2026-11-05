@@ -141,6 +141,44 @@ async fn serves_the_page_and_requires_login_for_api() {
 }
 
 #[tokio::test]
+async fn index_has_ogp_with_absolute_urls() {
+    let res = router(test_state())
+        .oneshot(Request::get("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = String::from_utf8(
+        to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains(r#"<meta property="og:image" content="http://localhost/og.png">"#));
+    assert!(html.contains(r#"<meta property="og:url" content="http://localhost/">"#));
+    assert!(html.contains(r#"<meta name="twitter:card" content="summary_large_image">"#));
+    assert!(!html.contains("__BASE_URL__"));
+
+    // ログインしていなくても画像は取れる（Discord などのクローラーはクッキーなしで来る）
+    for path in ["/og.png", "/apple-touch-icon.png"] {
+        let res = router(test_state())
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        assert_eq!(res.headers()[header::CONTENT_TYPE], "image/png");
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        assert!(bytes.starts_with(b"\x89PNG"), "{path}");
+    }
+}
+
+#[test]
+fn index_escapes_base_url() {
+    let html = crate::web::index_html(r#"https://x.example/"><script>"#);
+    assert!(html.contains("https://x.example/&quot;&gt;&lt;script&gt;/og.png"));
+}
+
+#[tokio::test]
 async fn login_redirects_to_discord_with_state_cookie() {
     let state = test_state();
     let res = router(state)
@@ -553,6 +591,7 @@ async fn settings_can_be_viewed_and_changed() {
     assert_eq!(s["default_time"], "08:30");
     assert_eq!(s["notify_role"], Value::Null);
     assert_eq!(s["my_dm_remind_before"], Value::Null);
+    assert_eq!(s["hide_link_previews"], true);
 
     let (status, s) = call(
         &state,
@@ -560,7 +599,8 @@ async fn settings_can_be_viewed_and_changed() {
         &url,
         Some(&alice),
         Some(json!({
-            "channel_id": "11", "remind_before": 0, "summary_time": "7:30", "default_time": "9時"
+            "channel_id": "11", "remind_before": 0, "summary_time": "7:30", "default_time": "9時",
+            "hide_link_previews": false
         })),
     )
     .await;
@@ -569,6 +609,7 @@ async fn settings_can_be_viewed_and_changed() {
     assert_eq!(s["remind_before"], Value::Null);
     assert_eq!(s["summary_time"], "07:30");
     assert_eq!(s["default_time"], "09:00");
+    assert_eq!(s["hide_link_previews"], false);
 
     // 未設定に戻す・まとめ投稿をオフ
     let (_, s) = call(
