@@ -141,6 +141,44 @@ async fn serves_the_page_and_requires_login_for_api() {
 }
 
 #[tokio::test]
+async fn index_has_ogp_with_absolute_urls() {
+    let res = router(test_state())
+        .oneshot(Request::get("/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let html = String::from_utf8(
+        to_bytes(res.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(html.contains(r#"<meta property="og:image" content="http://localhost/og.png">"#));
+    assert!(html.contains(r#"<meta property="og:url" content="http://localhost/">"#));
+    assert!(html.contains(r#"<meta name="twitter:card" content="summary_large_image">"#));
+    assert!(!html.contains("__BASE_URL__"));
+
+    // ログインしていなくても画像は取れる（Discord などのクローラーはクッキーなしで来る）
+    for path in ["/og.png", "/apple-touch-icon.png"] {
+        let res = router(test_state())
+            .oneshot(Request::get(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{path}");
+        assert_eq!(res.headers()[header::CONTENT_TYPE], "image/png");
+        let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+        assert!(bytes.starts_with(b"\x89PNG"), "{path}");
+    }
+}
+
+#[test]
+fn index_escapes_base_url() {
+    let html = crate::web::index_html(r#"https://x.example/"><script>"#);
+    assert!(html.contains("https://x.example/&quot;&gt;&lt;script&gt;/og.png"));
+}
+
+#[tokio::test]
 async fn login_redirects_to_discord_with_state_cookie() {
     let state = test_state();
     let res = router(state)

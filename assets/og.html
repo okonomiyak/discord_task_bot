@@ -1,0 +1,35 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700;900&display=block" rel="stylesheet">
+<style>
+*{box-sizing:border-box;margin:0}
+body{width:1200px;height:630px;background:#f4f5f7;font-family:"Noto Sans JP",sans-serif;color:#1d2129;position:relative;overflow:hidden}
+.top{position:absolute;top:0;left:0;right:0;height:14px;background:#5865f2}
+.left{position:absolute;left:80px;top:84px;width:600px}
+.logo{width:76px;height:76px;background:#5865f2;display:grid;place-items:center;margin-bottom:30px}
+h1{font-size:100px;font-weight:900;letter-spacing:.02em;line-height:1.1}
+p{margin-top:24px;font-size:29px;line-height:1.6;color:#4b5563;font-weight:500}
+.tabs{position:absolute;left:80px;bottom:72px;display:flex;gap:36px;font-size:26px;font-weight:700;color:#6b7280}
+.tabs span.on{color:#5865f2;border-bottom:5px solid #5865f2;padding-bottom:6px}
+.cards{position:absolute;right:64px;top:92px;width:452px;display:flex;flex-direction:column;gap:20px}
+.card{background:#fff;border:1px solid #dfe2e7;border-left:8px solid var(--c);padding:22px 24px;display:flex;gap:20px;box-shadow:0 2px 10px rgba(0,0,0,.05)}
+.check{flex:none;width:34px;height:34px;border:3px solid #dfe2e7;margin-top:4px;display:grid;place-items:center}
+.check.on{background:#1f9d55;border-color:#1f9d55}
+.subj{font-size:20px;font-weight:700;color:var(--c)}
+.title{font-size:28px;font-weight:700;margin-top:2px}
+.due{font-size:20px;color:#c27c0e;font-weight:700;margin-top:6px}
+.due.muted{color:#6b7280;font-weight:500}
+.done .title{text-decoration:line-through;color:#9ca3af}.done{opacity:.75}
+</style></head><body>
+<div class="top"></div>
+<div class="left">
+  <div class="logo"><svg width="46" height="46" viewBox="0 0 32 32"><path d="M6 16l7 7 13-14" fill="none" stroke="#fff" stroke-width="4.5"/></svg></div>
+  <h1>宿題ボード</h1>
+  <p>Discord の宿題・テスト・タスクを<br>ブラウザで確認して、そのまま完了に。</p>
+</div>
+<div class="tabs"><span class="on">やること</span><span>宿題</span><span>テスト</span><span>カレンダー</span></div>
+<div class="cards">
+  <div class="card" style="--c:#2f6fd0"><div class="check"></div><div><div class="subj">数学</div><div class="title">問題集 p.32〜35</div><div class="due">11/6(金) 08:30・あと12時間</div></div></div>
+  <div class="card" style="--c:#8b3fd1"><div class="check"></div><div><div class="subj">英語</div><div class="title">単語テスト Unit 5</div><div class="due muted">11/9(月) 10:40・あと3日</div></div></div>
+  <div class="card done" style="--c:#c0392b"><div class="check on"><svg width="20" height="20" viewBox="0 0 32 32"><path d="M6 16l7 7 13-14" fill="none" stroke="#fff" stroke-width="5"/></svg></div><div><div class="subj">国語</div><div class="title">読書感想文</div><div class="due muted">完了 18人・クラス 72%</div></div></div>
+</div>
+</body></html>
