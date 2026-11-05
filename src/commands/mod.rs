@@ -305,11 +305,20 @@ fn ctx_web_button(ctx: Context<'_>, tab: WebTab) -> Option<CreateButton> {
     web_button(ctx.data().web_url.as_deref(), guild_id.as_deref(), tab)
 }
 
-/// ボタン1つだけの行（None なら行なし）
-fn link_row(button: Option<CreateButton>) -> Vec<CreateActionRow> {
-    button
-        .map(|b| vec![CreateActionRow::Buttons(vec![b])])
-        .unwrap_or_default()
+/// ボタンを1行に並べる（ボタンがなければ行なし。Option も Vec も渡せる）
+fn link_row(buttons: impl IntoIterator<Item = CreateButton>) -> Vec<CreateActionRow> {
+    let buttons: Vec<CreateButton> = buttons.into_iter().collect();
+    if buttons.is_empty() {
+        vec![]
+    } else {
+        vec![CreateActionRow::Buttons(buttons)]
+    }
+}
+
+/// 「Googleカレンダーに追加」リンクボタン（押した人が Google の画面で保存したときだけ追加される）
+pub fn gcal_button(hw: &crate::models::Homework, web_base: Option<&str>) -> Option<CreateButton> {
+    crate::gcal::calendar_url(hw, web_base, Some(crate::gcal::DISCORD_URL_LIMIT))
+        .map(|url| CreateButton::new_link(url).label("Googleカレンダーに追加"))
 }
 
 /// Web ダッシュボードのリンクを表示する（ブラウザで宿題の確認・完了・編集ができます）
@@ -354,6 +363,7 @@ pub async fn web(
 }
 
 pub use hw::{done_buttons, handle_component, hw};
+
 pub use task::{delete_event, sync_event, task};
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -463,7 +473,8 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
         .field(
             "/hw done ・ /hw undo",
             "自分の分を完了にする・取り消す（候補から選べます）\n\
-             登録時・通知・まとめ投稿の ✅ ボタンでも完了にできます",
+             登録時・通知・まとめ投稿の ✅ ボタンでも完了にできます\n\
+             登録・/hw view の「Googleカレンダーに追加」で自分のカレンダーに入れられます",
             false,
         )
         .field(

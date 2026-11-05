@@ -1,5 +1,6 @@
 mod commands;
 mod db;
+mod gcal;
 mod hw_notify;
 mod models;
 mod reminder;

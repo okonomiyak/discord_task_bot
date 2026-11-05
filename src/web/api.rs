@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{ApiError, AppState, Auth, WebGuild, discord::ChannelInfo};
 use crate::{
-    commands::{WebTab, delete_event, done_buttons, sync_event, web_button},
+    commands::{WebTab, delete_event, done_buttons, gcal_button, sync_event, web_button},
     db::{HwEdit, TaskEdit},
     hw_notify::{role_allowed_mentions, with_role_mention},
     models::{
@@ -251,10 +251,19 @@ struct HwDto {
     created_by: String,
     repeat: bool,
     can_delete: bool,
+    /// Google カレンダーの「予定を作成」画面のリンク
+    gcal_url: Option<String>,
 }
 
-fn hw_dto(hw: Homework, auth: &Auth, guild: &WebGuild, class_size: usize) -> HwDto {
+fn hw_dto(
+    state: &AppState,
+    hw: Homework,
+    auth: &Auth,
+    guild: &WebGuild,
+    class_size: usize,
+) -> HwDto {
     HwDto {
+        gcal_url: crate::gcal::calendar_url(&hw, Some(&state.config.base_url), None),
         class_size,
         id: hw.id,
         kind: hw.kind.as_str(),
@@ -331,7 +340,7 @@ async fn list_homework(
     let list = state.db.hw_list(gid, query).await?;
     Ok(Json(
         list.into_iter()
-            .map(|hw| hw_dto(hw, &auth, &guild, class_size))
+            .map(|hw| hw_dto(&state, hw, &auth, &guild, class_size))
             .collect(),
     ))
 }
@@ -396,11 +405,16 @@ async fn create_homework(
             .components(done_buttons(
                 std::slice::from_ref(&hw),
                 false,
-                web_button(
-                    Some(&state.config.base_url),
-                    Some(&hw.guild_id),
-                    WebTab::from(hw.kind),
-                ),
+                [
+                    gcal_button(&hw, Some(&state.config.base_url)),
+                    web_button(
+                        Some(&state.config.base_url),
+                        Some(&hw.guild_id),
+                        WebTab::from(hw.kind),
+                    ),
+                ]
+                .into_iter()
+                .flatten(),
             ));
         announce(&state, channel.as_deref(), msg, Some(&settings)).await;
     }
@@ -411,7 +425,7 @@ async fn create_homework(
         StatusCode::OK
     };
     let class_size = state.db.hw_participants(hw.guild_id.clone()).await?.len();
-    Ok((status, Json(hw_dto(hw, &auth, &guild, class_size))))
+    Ok((status, Json(hw_dto(&state, hw, &auth, &guild, class_size))))
 }
 
 async fn edit_homework(
@@ -445,7 +459,7 @@ async fn edit_homework(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("#{id} が見つかりません")))?;
     let class_size = state.db.hw_participants(hw.guild_id.clone()).await?.len();
-    Ok(Json(hw_dto(hw, &auth, &guild, class_size)))
+    Ok(Json(hw_dto(&state, hw, &auth, &guild, class_size)))
 }
 
 async fn delete_homework(
@@ -498,7 +512,7 @@ async fn set_done(
         .await?
         .ok_or_else(|| ApiError::not_found(format!("#{id} が見つかりません")))?;
     let class_size = state.db.hw_participants(hw.guild_id.clone()).await?.len();
-    Ok(Json(hw_dto(hw, &auth, &guild, class_size)))
+    Ok(Json(hw_dto(&state, hw, &auth, &guild, class_size)))
 }
 
 #[derive(Serialize)]
@@ -602,7 +616,7 @@ async fn search(
         homework: homework
             .into_iter()
             .take(SEARCH_LIMIT)
-            .map(|hw| hw_dto(hw, &auth, &guild, class_size))
+            .map(|hw| hw_dto(&state, hw, &auth, &guild, class_size))
             .collect(),
         tasks: tasks.into_iter().take(SEARCH_LIMIT).map(task_dto).collect(),
     }))

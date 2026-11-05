@@ -5,8 +5,8 @@ use poise::serenity_prelude::{
 };
 
 use super::{
-    WebTab, build_pages, ctx_web_button, due_help, link_row, parse_due_with, reply_ephemeral,
-    send_paginated, truncate,
+    WebTab, build_pages, ctx_web_button, due_help, gcal_button, link_row, parse_due_with,
+    reply_ephemeral, send_paginated, truncate,
 };
 use crate::{
     Context, Data, Error,
@@ -193,14 +193,15 @@ fn button_id(prefix: &str, hw: &Homework) -> String {
     format!("{prefix}:{}:{}", hw.guild_id, hw.id)
 }
 
-/// 宿題の「完了」ボタン（テストには付けない）。link（「Web で開く」）を渡すと最後に付ける。
+/// 宿題の「完了」ボタン（テストには付けない）。links（「Web で開く」など）を渡すと最後に付ける。
 /// メッセージのボタンは最大25個なので、超える分は省く
 pub fn done_buttons(
     list: &[Homework],
     with_label: bool,
-    link: Option<CreateButton>,
+    links: impl IntoIterator<Item = CreateButton>,
 ) -> Vec<CreateActionRow> {
-    let limit = if link.is_some() { 24 } else { 25 };
+    let links: Vec<CreateButton> = links.into_iter().collect();
+    let limit = 25usize.saturating_sub(links.len());
     let mut buttons: Vec<CreateButton> = list
         .iter()
         .filter(|hw| hw.kind == HwKind::Homework)
@@ -217,7 +218,7 @@ pub fn done_buttons(
                 .label(label)
         })
         .collect();
-    buttons.extend(link);
+    buttons.extend(links);
     buttons
         .chunks(5)
         .map(|row| CreateActionRow::Buttons(row.to_vec()))
@@ -342,6 +343,17 @@ async fn ac_homework(ctx: Context<'_>, partial: &str, query: HwQuery) -> Vec<Aut
         .take(25)
         .map(|(label, id)| AutocompleteChoice::new(label, id))
         .collect()
+}
+
+/// 1件の宿題・テストに付けるリンク（Googleカレンダーに追加・Web で開く）
+fn hw_links(ctx: Context<'_>, hw: &Homework) -> Vec<CreateButton> {
+    [
+        gcal_button(hw, ctx.data().web_url.as_deref()),
+        ctx_web_button(ctx, WebTab::from(hw.kind)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 fn recent_from() -> String {
@@ -513,11 +525,11 @@ async fn register(
             .components(done_buttons(
                 std::slice::from_ref(&hw),
                 false,
-                ctx_web_button(ctx, WebTab::Homework),
+                hw_links(ctx, &hw),
             )),
         HwKind::Exam => base
             .embed(hw_embed(&hw, "📝 テストを登録しました", Colour(0xE74C3C)))
-            .components(link_row(ctx_web_button(ctx, WebTab::Exam))),
+            .components(link_row(hw_links(ctx, &hw))),
     };
     ctx.send(reply).await?;
     Ok(())
@@ -723,7 +735,7 @@ pub async fn view(
             .components(done_buttons(
                 std::slice::from_ref(&hw),
                 false,
-                ctx_web_button(ctx, WebTab::from(hw.kind)),
+                hw_links(ctx, &hw),
             )),
     )
     .await?;
