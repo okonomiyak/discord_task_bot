@@ -87,8 +87,25 @@
   .person span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .panel { background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 14px; margin-bottom: 12px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px; }
   .panel h2 { margin: 0; font-size: 16px; }
+  .help p { margin: 0; }
+  /* 目次から飛んだとき、見出しが上に固定したヘッダーの下に隠れないように */
+  .help { scroll-margin-top: 110px; }
+  /* 狭い画面ではロゴの文字を消して、サーバー名が読めるようにする */
+  @media (max-width: 480px) { .brand { display: none; } }
+  .help dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; font-size: 14px; }
+  .help dt { font-weight: 700; }
+  .help dd { margin: 0; color: var(--muted); }
+  .help ul { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+  .help table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  .help th, .help td { border: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+  .help th { background: var(--surface-2); font-weight: 700; }
+  .help code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background: var(--surface-2); padding: 0 4px; }
+  .help .toc { display: flex; flex-wrap: wrap; gap: 6px; }
+  .help .toc a { font-size: 13px; padding: 3px 8px; border: 1px solid var(--border); text-decoration: none; color: var(--text); background: var(--surface); }
+  @media (max-width: 420px) { .help dl { grid-template-columns: 1fr; gap: 2px; } .help dd { margin-bottom: 6px; } }
   .panel .hint { font-size: 12px; }
-  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+  .field input, .field select, .field textarea { min-width: 0; width: 100%; }
   @media (max-width: 420px) { .row2 { grid-template-columns: 1fr; } }
   .repeat { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--border); padding-top: 10px; }
   .repeat .body { flex: 1; min-width: 0; }
@@ -139,7 +156,8 @@
 
   .stats { background: var(--surface); border: 1px solid var(--border); border-radius: 0; padding: 14px; margin-bottom: 8px; box-shadow: var(--shadow); }
   .stats-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-  .stats-head .label { font-size: 13px; font-weight: 700; color: var(--muted); }
+  /* 「〇〇の達成率」は必ず1行を使い、期間の切り替えは次の行に置く */
+  .stats-head .label { flex-basis: 100%; font-size: 13px; font-weight: 700; color: var(--muted); }
   .stats .seg { padding: 2px; }
   .stats .seg button { padding: 3px 10px; font-size: 13px; white-space: nowrap; }
   .stats-main { display: flex; align-items: baseline; gap: 10px; margin: 8px 0 6px; }
@@ -154,6 +172,62 @@
   .subj-row { display: grid; grid-template-columns: minmax(0, 7em) 1fr auto; align-items: center; gap: 8px; font-size: 13px; margin-top: 6px; }
   .subj-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .subj-row .num { color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* ── 一覧のカード・レイアウト部品（スマホでは縦に並ぶだけ） ── */
+  .me { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+  .me-name, .btn-label, .fab-label { display: none; }
+  .todo-grid { display: grid; grid-template-columns: minmax(0, 1fr); grid-template-areas: "stats" "main" "tests"; }
+  .todo-stats { grid-area: stats; } .todo-main { grid-area: main; } .todo-tests { grid-area: tests; }
+  .cal-layout { display: grid; grid-template-columns: minmax(0, 1fr); }
+
+  /* ── PC（幅 1024px 以上）: 左にサイドバー、内容は横に広く ── */
+  @media (min-width: 1024px) {
+    #app:not([hidden]) { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 100vh; }
+    header {
+      position: sticky; top: 0; height: 100vh; overflow-y: auto;
+      display: flex; flex-direction: column; gap: 4px;
+      border-bottom: 0; border-right: 1px solid var(--border); padding: 20px 12px 84px;
+    }
+    header .bar { display: contents; }
+    .brand { display: block !important; order: 1; font-size: 18px; padding: 0 8px 8px; }
+    #guild { order: 2; flex: none; width: 100%; padding: 8px; margin-bottom: 8px; }
+    nav { order: 3; flex-direction: column; gap: 2px; max-width: none; margin: 0; padding: 0; overflow: visible; }
+    nav button { flex: none; text-align: left; padding: 10px 12px; font-size: 15px; border-bottom: 0; border-left: 3px solid transparent; }
+    nav button.active { border-left-color: var(--accent); background: var(--surface-2); }
+    nav button:hover { background: var(--surface-2); color: var(--text); }
+    .me { order: 4; margin-top: auto; padding: 12px 8px 4px; border-top: 1px solid var(--border); }
+    .me-name { display: block; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    header .icon-btn { order: 5; display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 12px; font-size: 14px; }
+    .btn-label { display: inline; }
+    .fab {
+      z-index: 20; /* サイドバー（z-index 10）より手前に */
+      left: 12px; right: auto; bottom: 20px; width: 216px; height: 44px; font-size: 15px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center; gap: 6px; box-shadow: none;
+    }
+    .fab-plus { font-size: 20px; }
+    .fab-label { display: inline; }
+
+    main { max-width: 1320px; width: 100%; margin: 0; padding: 24px 32px 48px; }
+    .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 1fr)); gap: 10px; align-items: start; }
+    .cards > .card { margin: 0; }
+    .section-title { font-size: 14px; margin-top: 24px; }
+    .toolbar { font-size: 15px; }
+
+    .todo-grid { grid-template-columns: minmax(0, 1fr) 340px; grid-template-areas: "main stats" "main tests"; grid-template-rows: auto 1fr; gap: 0 24px; align-items: start; }
+    .todo-tests .cards { grid-template-columns: minmax(0, 1fr); }
+    .todo-main > .section-title:first-child { margin-top: 0; }
+
+    .cal-layout { grid-template-columns: minmax(0, 1fr) 360px; gap: 24px; align-items: start; }
+    .cal .day { min-height: 112px; padding: 6px; }
+    .cal .item { font-size: 12px; padding: 1px 4px; }
+    .cal-detail { position: sticky; top: 24px; }
+    .cal-detail .cards { grid-template-columns: minmax(0, 1fr); }
+    .cal-detail .section-title:first-child { margin-top: 0; }
+
+    .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; align-items: start; }
+    .settings-grid > .panel { margin: 0; }
+    .help-wrap { max-width: 920px; }
+    .search-box { max-width: 640px; }
+  }
   #toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: #222; color: #fff; padding: 8px 14px; border-radius: 0; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s; max-width: calc(100vw - 32px); }
   #toast.show { opacity: .95; }
 
@@ -176,10 +250,11 @@
     <div class="bar">
       <span class="brand">宿題ボード</span>
       <select id="guild" aria-label="サーバー"></select>
-      <img class="avatar" id="avatar" alt="">
-      <button class="icon-btn" id="open-search" title="検索" aria-label="検索"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg></button>
-      <button class="icon-btn" id="open-settings" title="設定" aria-label="設定"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/><rect x="7" y="4" width="4" height="4" fill="var(--surface)"/><rect x="14" y="10" width="4" height="4" fill="var(--surface)"/><rect x="5" y="16" width="4" height="4" fill="var(--surface)"/></svg></button>
-      <button class="icon-btn" id="logout" title="ログアウト">ログアウト</button>
+      <div class="me"><img class="avatar" id="avatar" alt=""><span class="me-name" id="me-name"></span></div>
+      <button class="icon-btn" id="open-search" title="検索" aria-label="検索"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/></svg><span class="btn-label">検索</span></button>
+      <button class="icon-btn" id="open-help" title="使い方" aria-label="使い方"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="3" width="18" height="18"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6V14"/><path d="M12 17.5v.5"/></svg><span class="btn-label">使い方</span></button>
+      <button class="icon-btn" id="open-settings" title="設定" aria-label="設定"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M3 12h18M3 18h18"/><rect x="7" y="4" width="4" height="4" fill="var(--surface)"/><rect x="14" y="10" width="4" height="4" fill="var(--surface)"/><rect x="5" y="16" width="4" height="4" fill="var(--surface)"/></svg><span class="btn-label">設定</span></button>
+      <button class="icon-btn" id="logout" title="ログアウト" aria-label="ログアウト"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 4H4v16h10"/><path d="M10 12h11M17 8l4 4-4 4"/></svg><span class="btn-label">ログアウト</span></button>
     </div>
     <nav id="tabs">
       <button data-tab="todo">やること</button>
@@ -190,7 +265,7 @@
     </nav>
   </header>
   <main id="view"></main>
-  <button class="fab" id="add" title="追加">＋</button>
+  <button class="fab" id="add" title="追加"><span class="fab-plus">＋</span><span class="fab-label">追加</span></button>
 </div>
 
 <dialog id="editor">
@@ -430,6 +505,14 @@ function taskCard(t) {
       editButton(() => openEditor("task", t))));
 }
 
+const WIDE = window.matchMedia("(min-width: 1024px)");
+function isWide() { return WIDE.matches; }
+
+/// カードの一覧（PC では横に並ぶ）
+function cardList(items, render) {
+  return el("div", { class: "cards" }, ...items.map(render));
+}
+
 function pastToggle() {
   return el("label", { class: "toggle" },
     el("input", { type: "checkbox", checked: state.past, onchange: (e) => { state.past = e.target.checked; render(); } }),
@@ -484,15 +567,19 @@ async function viewTodo(v) {
     api(g("/homework?scope=upcoming&kind=exam")),
     api(g(`/stats?period=${state.statsPeriod}`)),
   ]);
-  v.append(statsCard(st));
   const now = Date.now() / 1000;
   const over = list.filter((h) => h.due_unix < now);
   const rest = list.filter((h) => h.due_unix >= now);
-  if (!list.length) v.append(empty("未完了の宿題はありません"));
-  if (over.length) v.append(el("div", { class: "section-title" }, `期限切れ（${over.length}）`), ...over.map(hwCard));
-  if (rest.length) v.append(el("div", { class: "section-title" }, `これから（${rest.length}）`), ...rest.map(hwCard));
   const soon = exams.filter((e) => e.due_unix - now < 14 * 86400);
-  if (soon.length) v.append(el("div", { class: "section-title" }, "2週間以内のテスト"), ...soon.map(hwCard));
+
+  const main = el("div", { class: "todo-main" });
+  if (!list.length) main.append(empty("未完了の宿題はありません"));
+  if (over.length) main.append(el("div", { class: "section-title" }, `期限切れ（${over.length}）`), cardList(over, hwCard));
+  if (rest.length) main.append(el("div", { class: "section-title" }, `これから（${rest.length}）`), cardList(rest, hwCard));
+  const tests = el("div", { class: "todo-tests" });
+  if (soon.length) tests.append(el("div", { class: "section-title" }, "2週間以内のテスト"), cardList(soon, hwCard));
+  // PC では右の列（達成率・テスト）、スマホでは 達成率 → 宿題 → テスト の順
+  v.append(el("div", { class: "todo-grid" }, el("div", { class: "todo-stats" }, statsCard(st)), main, tests));
 }
 
 async function viewHw(v, kind) {
@@ -500,7 +587,7 @@ async function viewHw(v, kind) {
   const scope = state.past ? "past" : "upcoming";
   const list = await api(g(`/homework?scope=${scope}&kind=${kind}`));
   if (!list.length) v.append(empty(kind === "exam" ? "テストの予定はありません" : "宿題はありません。＋ から追加できます"));
-  v.append(...list.map(hwCard));
+  v.append(cardList(list, hwCard));
 }
 
 async function viewTasks(v) {
@@ -510,7 +597,7 @@ async function viewTasks(v) {
       "完了したものも表示")));
   const list = await api(g(`/tasks?scope=${state.past ? "all" : "open"}`));
   if (!list.length) v.append(empty("タスクはありません"));
-  v.append(...list.map(taskCard));
+  v.append(cardList(list, taskCard));
 }
 
 async function viewCalendar(v) {
@@ -524,8 +611,14 @@ async function viewCalendar(v) {
   for (const h of hw) (byDay[h.due.slice(0, 10)] ||= []).push({ type: h.kind, item: h });
   for (const t of tasks) (byDay[t.due.slice(0, 10)] ||= []).push({ type: "task", item: t });
 
+  const wide = isWide();
+  const maxItems = wide ? 4 : 3;
+  const calMain = el("div");
+  const detail = el("div", { class: "cal-detail" });
+  v.append(el("div", { class: "cal-layout" }, calMain, detail));
+
   const move = (n) => { state.cal = new Date(first.getFullYear(), first.getMonth() + n, 1); state.calSelected = null; render(); };
-  v.append(el("div", { class: "cal-head" },
+  calMain.append(el("div", { class: "cal-head" },
     el("button", { class: "btn", onclick: () => move(-1) }, "‹"),
     el("h2", {}, `${first.getFullYear()}年${first.getMonth() + 1}月`),
     el("button", { class: "btn", onclick: () => move(1) }, "›")));
@@ -540,27 +633,126 @@ async function viewCalendar(v) {
       class: `day ${d.getMonth() !== first.getMonth() ? "other" : ""} ${key === today ? "today" : ""} ${key === state.calSelected ? "selected" : ""}`,
       onclick: () => { state.calSelected = key; render(); },
     }, el("span", { class: "num" }, d.getDate()));
-    items.slice(0, 3).forEach(({ type, item }) => {
+    items.slice(0, maxItems).forEach(({ type, item }) => {
       const done = type === "task" ? item.status === "Done" : item.done_by_me;
-      // セルが狭いので科目だけ（内容は下の一覧に出る）
-      const label = type === "task" ? item.title : item.subject;
+      // スマホはマスが狭いので科目だけ（内容は下の一覧に出る）。PC は内容も
+      const label = type === "task" ? item.title : wide ? `${item.subject} ${item.title}` : item.subject;
       cell.append(el("span", {
         class: `item ${type === "task" ? "task" : "subj"} ${type === "exam" ? "exam-item" : ""} ${done ? "done" : ""}`,
         title: type === "exam" ? "テスト" : null,
         style: type === "task" ? null : `--h:${subjectHue(item.subject)}`,
       }, label));
     });
-    if (items.length > 3) cell.append(el("span", { class: "more" }, `+${items.length - 3}`));
+    if (items.length > maxItems) cell.append(el("span", { class: "more" }, `+${items.length - maxItems}`));
     grid.append(cell);
   }
-  v.append(grid);
+  calMain.append(grid);
 
   const sel = state.calSelected || today;
   const items = byDay[sel] || [];
   const [y, m, dd] = sel.split("-").map(Number);
-  v.append(el("div", { class: "section-title" }, `${m}/${dd}(${WD[new Date(y, m - 1, dd).getDay()]}) の予定`));
-  if (!items.length) v.append(el("div", { class: "empty", style: "padding:16px" }, "予定はありません"));
-  v.append(...items.map(({ type, item }) => (type === "task" ? taskCard(item) : hwCard(item))));
+  detail.append(el("div", { class: "section-title" }, `${m}/${dd}(${WD[new Date(y, m - 1, dd).getDay()]}) の予定`));
+  if (!items.length) detail.append(el("div", { class: "empty", style: "padding:16px" }, "予定はありません"));
+  detail.append(cardList(items, ({ type, item }) => (type === "task" ? taskCard(item) : hwCard(item))));
+}
+
+// ── 使い方 ───────────────────────────────────────────────────────────
+function helpSection(id, title, ...children) {
+  return el("section", { class: "panel help", id }, el("h2", {}, title), ...children);
+}
+function defs(rows) {
+  return el("dl", {}, ...rows.flatMap(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]));
+}
+function table(head, rows) {
+  return el("table", {}, el("thead", {}, el("tr", {}, ...head.map((h) => el("th", {}, h)))),
+    el("tbody", {}, ...rows.map((r) => el("tr", {}, ...r.map((c, i) => el("td", {}, i === 0 ? el("code", {}, c) : c))))));
+}
+function bullets(items) {
+  return el("ul", {}, ...items.map((t) => el("li", {}, t)));
+}
+
+function viewHelp(v) {
+  const sections = [
+    ["help-tabs", "画面の見方"],
+    ["help-homework", "宿題の操作"],
+    ["help-due", "期限の書き方"],
+    ["help-notify", "通知と設定"],
+    ["help-faq", "よくある質問"],
+    ["help-discord", "Discord のコマンド"],
+  ];
+  v.append(
+    el("section", { class: "panel help" },
+      el("h2", {}, "使い方"),
+      el("p", { class: "hint" }, "Discord の宿題・テスト・タスクを、このサイトから確認・完了・登録・編集できます。内容は Discord と同じデータです。"),
+      el("nav", { class: "toc", "aria-label": "目次" }, ...sections.map(([id, title]) =>
+        el("a", { href: `#${id}`, onclick: (e) => { e.preventDefault(); document.getElementById(id)?.scrollIntoView({ behavior: "smooth" }); } }, title)))),
+
+    helpSection("help-tabs", "画面の見方", defs([
+      ["やること", "自分がまだ終わっていない宿題（期限切れは1週間前まで）と、2週間以内のテスト。上に自分の達成率"],
+      ["宿題", "みんなの宿題の一覧。「期限が過ぎたものも表示」で過去の分も見られる"],
+      ["テスト", "テスト・小テストの予定"],
+      ["タスク", "タスク（/task）の一覧。ステータスはその場で変えられる"],
+      ["カレンダー", "期限を月ごとに表示。日付を押すとその日の予定。枠線だけの項目はテスト"],
+      ["検索", "右上の虫めがね。科目・内容・メモ・タスク名で、過去の分も含めて探せる"],
+      ["設定", "右上のスライダー。サーバーの通知設定・自分への DM 通知・毎週の宿題"],
+      ["＋ボタン", "右下。宿題・テスト・タスクを追加。Discord のチャンネルにも投稿される"],
+    ])),
+
+    helpSection("help-homework", "宿題の操作", defs([
+      ["完了にする", "左の四角を押す。自分の分だけが完了になり、もう一度押すと戻せる"],
+      ["完了 ○人", "押すと、終わった人の名前が出る"],
+      ["クラス ○%", "宿題の完了を記録したことがある人のうち、終わった人の割合"],
+      ["編集", "右の鉛筆。科目・内容・期限・メモを変えられる"],
+      ["削除", "編集画面の「削除」。宿題を消せるのは登録した人か、メッセージの管理権限がある人だけ"],
+      ["毎週", "毎週の宿題から自動で登録されたもの。期限が過ぎると翌週の分が登録される"],
+      ["メモのリンク", "メモに書いた https:// で始まる URL は押すと開ける"],
+    ])),
+
+    helpSection("help-due", "期限の書き方",
+      el("p", { class: "hint" }, "時刻を省略すると、設定画面の「時刻を省略したときの期限」（最初は 08:30）になります。日時の入力欄から選ぶこともできます。"),
+      table(["書き方", "意味"], [
+        ["今日 / 明日 / 明後日", "その日"],
+        ["明日 17:00 / 明日17時半", "時刻つき（「17時」「17時30分」も可）"],
+        ["金 / 金曜 / 金曜日", "次のその曜日（今日と同じ曜日なら来週）"],
+        ["12/5 / 12/5 13:00", "年は省略できる（過ぎた日付なら来年）"],
+        ["2025-12-05 / 2025/12/05 9:00", "年から書く"],
+      ])),
+
+    helpSection("help-notify", "通知と設定", defs([
+      ["期限前の通知", "期限の1日前（設定で変更・オフ可）に、通知チャンネルへまとめて投稿"],
+      ["毎日のまとめ", "毎日 21:00（設定で変更・オフ可）に、今日・明日・1週間以内の宿題、2週間以内のテスト、未完了のタスク（期限切れ・1週間以内）を投稿"],
+      ["自分への DM", "設定画面の「自分への DM 通知」で、未完了の宿題とテストを期限前に DM で受け取れる"],
+      ["通知ロール", "Discord の /hw role setup で作るロール。付けた人に、登録・期限前・まとめの通知でメンションが届く"],
+      ["通知チャンネル", "未設定なら、宿題を登録したチャンネル（まとめは最後に登録したチャンネル）に投稿"],
+    ])),
+
+    helpSection("help-faq", "よくある質問", defs([
+      ["達成率の対象は？", "宿題だけ（テストは含まない）。期間は今週・今月・全期間から選べる"],
+      ["クラス平均の分母は？", "このサーバーで宿題の完了を一度でも記録したことがある人。始めたばかりは人数が少なく、数字が大きく動く"],
+      ["見られるサーバーは？", "自分が入っていて、ボットもいるサーバー。右上で切り替えられる"],
+      ["パスワードは保存される？", "されない。ログインは Discord の画面で行い、このサイトは名前・アイコン・入っているサーバーだけを受け取る"],
+      ["表示がおかしいときは", "ページを再読み込み。直らなければログアウトしてもう一度ログイン"],
+    ])),
+
+    helpSection("help-discord", "Discord のコマンド",
+      el("p", { class: "hint" }, "同じことを Discord からもできます。宿題は /hw、タスクは /task から始まります。"),
+      table(["コマンド", "内容"], [
+        ["/hw add", "宿題を登録"],
+        ["/hw todo", "自分がまだ終わっていない宿題（自分にだけ表示）"],
+        ["/hw list", "宿題の一覧（past:true で期限が過ぎたもの）"],
+        ["/hw done ・ /hw undo", "自分の分を完了にする・取り消す"],
+        ["/hw view ・ edit ・ delete", "詳細・編集・削除"],
+        ["/hw exam add ・ list", "テストの登録・一覧"],
+        ["/hw repeat add ・ list ・ delete", "毎週の宿題"],
+        ["/hw stats", "自分の達成率（public:true でみんなに見せる）"],
+        ["/hw settings", "サーバーの通知設定"],
+        ["/hw notify", "自分への DM 通知"],
+        ["/hw role setup ・ remove", "課題通知ロール（ロールの管理権限が必要）"],
+        ["/task add ・ list ・ search ・ view", "タスクの登録・一覧・検索・詳細"],
+        ["/task status ・ assign ・ edit ・ delete", "ステータス変更・担当者・編集・削除"],
+        ["/help", "コマンド一覧を Discord に表示"],
+      ])),
+  );
 }
 
 // ── 検索 ─────────────────────────────────────────────────────────────
@@ -569,8 +761,8 @@ async function showSearchResults(box, q) {
   const r = await api(g(`/search?q=${encodeURIComponent(q.trim())}`));
   if (q !== state.searchQ) return; // 入力が変わっていたら古い結果は捨てる
   const parts = [];
-  if (r.homework.length) parts.push(el("div", { class: "section-title" }, `宿題・テスト（${r.homework.length}）`), ...r.homework.map(hwCard));
-  if (r.tasks.length) parts.push(el("div", { class: "section-title" }, `タスク（${r.tasks.length}）`), ...r.tasks.map(taskCard));
+  if (r.homework.length) parts.push(el("div", { class: "section-title" }, `宿題・テスト（${r.homework.length}）`), cardList(r.homework, hwCard));
+  if (r.tasks.length) parts.push(el("div", { class: "section-title" }, `タスク（${r.tasks.length}）`), cardList(r.tasks, taskCard));
   box.replaceChildren(...(parts.length ? parts : [empty(`「${q.trim()}」に一致するものはありません`)]));
 }
 
@@ -614,6 +806,7 @@ async function saveSettings(path, method, body, btn) {
 }
 
 async function viewSettings(v) {
+  v.classList.add("settings-grid");
   const [st, repeats, subjects] = await Promise.all([api(g("/settings")), api(g("/repeats")), api(g("/subjects"))]);
   $("#subjects").replaceChildren(...subjects.map((sub) => el("option", { value: sub })));
 
@@ -706,8 +899,10 @@ async function viewSettings(v) {
 async function render() {
   document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === state.tab));
   $("#open-settings").classList.toggle("active", state.tab === "settings");
+  $("#open-help").classList.toggle("active", state.tab === "help");
   $("#open-search").classList.toggle("active", state.tab === "search");
-  $("#add").hidden = !state.guild || state.tab === "settings" || state.tab === "search";
+  $("#add").hidden = !state.guild || ["settings", "search", "help"].includes(state.tab);
+  if (state.tab === "help") { const hv = el("div", { class: "help-wrap" }); viewHelp(hv); $("#view").replaceChildren(hv); return; }
   const v = $("#view");
   if (!state.guild) { v.replaceChildren(empty("ボットが入っているサーバーがありません。ボットがいるサーバーに参加してから、もう一度ログインしてください。")); return; }
   const next = el("div");
@@ -795,6 +990,9 @@ $("#delete").addEventListener("click", async () => {
 $("#cancel").addEventListener("click", () => $("#editor").close());
 $("#kind-seg").addEventListener("click", (e) => { if (e.target.dataset.kind) setKind(e.target.dataset.kind); });
 $("#picker").addEventListener("change", (e) => { if (e.target.value) $("#form [name=due]").value = e.target.value.replace("T", " "); });
+$("#open-help").addEventListener("click", () => {
+  state.tab = state.tab === "help" ? "todo" : "help"; localStorage.setItem("tab", state.tab); render(); window.scrollTo(0, 0);
+});
 $("#open-search").addEventListener("click", () => {
   state.tab = state.tab === "search" ? "todo" : "search"; localStorage.setItem("tab", state.tab); render();
 });
@@ -811,6 +1009,7 @@ document.querySelectorAll("#tabs button").forEach((b) => b.addEventListener("cli
 }));
 $("#guild").addEventListener("change", (e) => { state.guild = e.target.value; localStorage.setItem("guild", state.guild); render(); });
 $("#logout").addEventListener("click", async () => { await fetch("/logout", { method: "POST" }); showLogin(); });
+WIDE.addEventListener("change", () => { if (state.me && state.tab === "calendar") render(); });
 window.addEventListener("focus", () => { if (state.me && !$("#editor").open) render(); });
 
 (async function init() {
@@ -819,6 +1018,7 @@ window.addEventListener("focus", () => { if (state.me && !$("#editor").open) ren
   $("#login").hidden = true; $("#app").hidden = false;
   if (state.me.avatar_url) $("#avatar").src = state.me.avatar_url; else $("#avatar").hidden = true;
   $("#avatar").title = state.me.name;
+  $("#me-name").textContent = state.me.name;
   const guilds = state.me.guilds;
   $("#guild").replaceChildren(...guilds.map((gd) => el("option", { value: gd.id }, gd.name)));
   if (!guilds.some((gd) => gd.id === state.guild)) state.guild = guilds[0]?.id || "";
