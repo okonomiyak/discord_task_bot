@@ -24,41 +24,36 @@ const SUMMARY_DAYS: i64 = 7;
 /// まとめ投稿に載せるテストの期間（日）
 const SUMMARY_EXAM_DAYS: i64 = 14;
 
-/// 夜中（QUIET_START 時〜翌 QUIET_END 時）は期限前の通知を送らない
+/// 期限前の通知は、夜 QUIET_START 時より遅く・朝 QUIET_END 時より早くは送らない
 const QUIET_START: u32 = 22;
 const QUIET_END: u32 = 7;
-/// 夜中を避けて前の晩に送るときの時刻（QUIET_START の少し前）
-const QUIET_EARLY: (u32, u32) = (21, 30);
 
-/// 期限前の通知を送る時刻。期限の remind_before 秒前が夜中（22:00〜7:00）に当たるときは、
-/// 朝 7:00 にずらす。それだと期限に間に合わないときは、その前の晩の 21:30 に早める
-/// （例: 23:59 締め切りの「1日前」は前日の 23:59 ではなく当日の 7:00）
+/// 期限前の通知を送る時刻（期限の remind_before 秒前を、夜中に当たるときだけずらす）
+///
+/// - 22:00〜24:00 に当たるときは、その晩の 22:00 に早める
+///   （例: 23:59 締め切りの「1日前」は前日の 23:59 ではなく前日の 22:00）
+/// - 0:00〜7:00 に当たるときは朝 7:00 にずらす。それだと期限に間に合わないときは前の晩の 22:00
 pub fn notify_time(due: DateTime<Utc>, remind_before: i64) -> DateTime<Utc> {
     let at = due - Duration::seconds(remind_before);
     let tz = timezone();
     let local = at.with_timezone(&tz).naive_local();
     let hour = local.hour();
-    if (QUIET_END..QUIET_START).contains(&hour) {
-        return at;
-    }
-    // 夜中が始まった日（0〜7時なら前の日）
-    let night = if hour >= QUIET_START {
-        local.date()
-    } else {
-        local.date() - Duration::days(1)
+    let at_local = |date: chrono::NaiveDate, h: u32| {
+        date.and_hms_opt(h, 0, 0)
+            .and_then(|t| local_to_utc(t, tz))
+            .unwrap_or(at)
     };
-    let morning = (night + Duration::days(1))
-        .and_hms_opt(QUIET_END, 0, 0)
-        .and_then(|t| local_to_utc(t, tz));
-    if let Some(m) = morning
-        && m < due
-    {
-        return m;
+    if hour >= QUIET_START {
+        return at_local(local.date(), QUIET_START);
     }
-    night
-        .and_hms_opt(QUIET_EARLY.0, QUIET_EARLY.1, 0)
-        .and_then(|t| local_to_utc(t, tz))
-        .unwrap_or(at)
+    if hour < QUIET_END {
+        let morning = at_local(local.date(), QUIET_END);
+        if morning < due {
+            return morning;
+        }
+        return at_local(local.date() - Duration::days(1), QUIET_START);
+    }
+    at
 }
 
 /// 今この通知を送るべきか
@@ -508,10 +503,19 @@ mod tests {
     fn reminders_avoid_the_night() {
         let hour = 3600;
         let day = 24 * hour;
-        // 23:59 締め切りの「1日前」は、前日の 23:59 ではなく当日の朝 7:00
+        // 23:59 締め切りの「1日前」は、前日の 23:59 ではなく前日の 22:00
         assert_eq!(
             notify_time(jst("2025-10-10 23:59"), day),
-            jst("2025-10-10 07:00")
+            jst("2025-10-09 22:00")
+        );
+        // 22 時台・23 時台に当たるものは、その晩の 22:00（1時間前の通知も 22:00）
+        assert_eq!(
+            notify_time(jst("2025-10-10 23:59"), hour),
+            jst("2025-10-10 22:00")
+        );
+        assert_eq!(
+            notify_time(jst("2025-10-10 22:00"), day),
+            jst("2025-10-09 22:00")
         );
         // 昼間ならそのまま
         assert_eq!(
@@ -522,14 +526,10 @@ mod tests {
             notify_time(jst("2025-10-10 23:00"), 3 * hour),
             jst("2025-10-10 20:00")
         );
-        // 朝 7:00 だと締め切りに間に合わないときは、前の晩の 21:30
-        assert_eq!(
-            notify_time(jst("2025-10-10 23:59"), hour),
-            jst("2025-10-10 21:30")
-        );
+        // 0:00〜7:00 に当たり、朝 7:00 だと締め切りに間に合わないときは、前の晩の 22:00
         assert_eq!(
             notify_time(jst("2025-10-10 06:00"), hour),
-            jst("2025-10-09 21:30")
+            jst("2025-10-09 22:00")
         );
         // 夜中の 2:00 締め切りの「1日前」（前の日の 2:00）→ その朝 7:00
         assert_eq!(
@@ -544,30 +544,23 @@ mod tests {
             due,
             day,
             created,
-            jst("2025-10-09 23:59"),
+            jst("2025-10-09 21:59"),
             true
         ));
+        assert!(should_notify(
+            due,
+            day,
+            created,
+            jst("2025-10-09 22:00"),
+            true
+        ));
+        // 22:00 より後に登録したものは、登録時のメッセージで分かるのでチャンネルには送らない
+        let created_late = jst("2025-10-09 22:30").timestamp();
         assert!(!should_notify(
             due,
             day,
-            created,
-            jst("2025-10-10 06:59"),
-            true
-        ));
-        assert!(should_notify(
-            due,
-            day,
-            created,
-            jst("2025-10-10 07:00"),
-            true
-        ));
-        // 夜中に登録したものは、朝の通知時刻より前の登録なので通知される
-        let created_at_night = jst("2025-10-10 00:30").timestamp();
-        assert!(should_notify(
-            due,
-            day,
-            created_at_night,
-            jst("2025-10-10 07:00"),
+            created_late,
+            jst("2025-10-09 22:31"),
             true
         ));
     }

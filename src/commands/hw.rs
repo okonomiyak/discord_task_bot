@@ -1533,7 +1533,7 @@ fn settings_embed(s: &HwSettings) -> CreateEmbed {
             true,
         )
         .footer(serenity::CreateEmbedFooter::new(format!(
-            "時刻は {} / 期限前の通知は夜中（22:00〜7:00）を避けて送ります / 個人の DM 通知は /hw notify で設定",
+            "時刻は {} / 期限前の通知は 22:00〜7:00 を避けて送ります / 個人の DM 通知は /hw notify で設定",
             timezone()
         )))
 }
