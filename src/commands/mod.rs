@@ -520,7 +520,7 @@ pub async fn help(ctx: Context<'_>) -> Result<(), Error> {
         .field(
             "/hw role setup ・ /hw role remove",
             "課題通知ロールを作成して、付け外しボタンを投稿（要: ロールの管理）\n\
-             登録・期限前の通知・まとめ投稿でこのロールをメンションします",
+             初期値は毎日のまとめ投稿だけでメンション（/hw settings mention で登録・期限前の通知も）",
             false,
         )
         .field(

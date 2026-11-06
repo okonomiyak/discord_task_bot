@@ -296,6 +296,8 @@ pub struct HwSettings {
     pub notify_role_id: Option<String>,
     /// 通知などの本文に入った URL のカード（埋め込み）を出さない（初期値: オン）
     pub hide_link_previews: bool,
+    /// 通知ロールを登録時・期限前の通知でもメンションする（初期値: オフ = まとめ投稿だけ）
+    pub mention_all: bool,
 }
 
 impl HwSettings {
@@ -322,12 +324,19 @@ impl HwSettings {
             last_summary_date: None,
             notify_role_id: None,
             hide_link_previews: true,
+            mention_all: false,
         }
     }
 
     /// 通知ロールのメンション（メッセージ本文の先頭に付ける）
     pub fn role_mention(&self) -> Option<String> {
         self.notify_role_id.as_ref().map(|r| format!("<@&{r}>"))
+    }
+
+    /// 登録時・期限前の通知でメンションするときだけ自分を返す（まとめ投稿だけの設定なら None）。
+    /// `with_role_mention`・`role_allowed_mentions` に渡す
+    pub fn for_event_mention(&self) -> Option<&Self> {
+        self.mention_all.then_some(self)
     }
 }
 
@@ -342,4 +351,5 @@ pub struct HwSettingsPatch {
     /// Some(None) で通知ロールを解除
     pub notify_role_id: Option<Option<String>>,
     pub hide_link_previews: Option<bool>,
+    pub mention_all: Option<bool>,
 }
