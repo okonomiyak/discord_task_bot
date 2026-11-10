@@ -503,13 +503,13 @@ async fn register(
         .await?;
         return Ok(());
     }
-    // 通知ロールが設定されていればメンションする（他のメンションは鳴らさない）
+    // 「登録・期限前の通知でもメンション」の設定なら通知ロールを鳴らす（他のメンションは鳴らさない）
     let settings = db.hw_settings(hw.guild_id.clone()).await?;
-    let mut base =
-        poise::CreateReply::default().allowed_mentions(role_allowed_mentions(Some(&settings)));
-    if settings.notify_role_id.is_some() {
+    let mention = settings.for_event_mention();
+    let mut base = poise::CreateReply::default().allowed_mentions(role_allowed_mentions(mention));
+    if mention.is_some_and(|s| s.notify_role_id.is_some()) {
         base = base.content(with_role_mention(
-            Some(&settings),
+            mention,
             format!("新しい{}が登録されました", hw.kind.display()),
         ));
     }
@@ -1373,10 +1373,13 @@ pub async fn role_setup(
     .await?;
 
     let mut note = if created {
-        format!("✅ <@&{role_id}> ロールを作成して、課題の通知でメンションするようにしました。")
+        format!(
+            "✅ <@&{role_id}> ロールを作成して、毎日のまとめ投稿でメンションするようにしました。"
+        )
     } else {
-        format!("✅ 課題の通知で <@&{role_id}> をメンションするようにしました。")
+        format!("✅ 毎日のまとめ投稿で <@&{role_id}> をメンションするようにしました。")
     };
+    note += "\n登録時・期限前の通知でも鳴らすときは `/hw settings mention:登録・期限前の通知・まとめ投稿`";
     if !mentionable {
         note += "\n⚠️ このロールは「誰でも@mentionを許可」がオフです。オンにするか、ボットに「@everyone、@here、全てのロールにメンション」権限を付けないと通知が届きません。";
     }
@@ -1508,10 +1511,11 @@ fn settings_embed(s: &HwSettings) -> CreateEmbed {
         .field("まとめ投稿", summary, true)
         .field(
             "通知ロール",
-            s.notify_role_id
-                .as_ref()
-                .map(|r| format!("<@&{r}>"))
-                .unwrap_or_else(|| "なし（/hw role setup で設定）".to_string()),
+            match &s.notify_role_id {
+                None => "なし（/hw role setup で設定）".to_string(),
+                Some(r) if s.mention_all => format!("<@&{r}>（登録・期限前の通知・まとめ投稿）"),
+                Some(r) => format!("<@&{r}>（まとめ投稿だけ）"),
+            },
             true,
         )
         .field(
@@ -1529,9 +1533,17 @@ fn settings_embed(s: &HwSettings) -> CreateEmbed {
             true,
         )
         .footer(serenity::CreateEmbedFooter::new(format!(
-            "時刻は {} / 個人の DM 通知は /hw notify で設定",
+            "時刻は {} / 期限前の通知は 22:00〜7:00 を避けて送ります / 個人の DM 通知は /hw notify で設定",
             timezone()
         )))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, poise::ChoiceParameter)]
+pub enum MentionChoice {
+    #[name = "まとめ投稿だけ"]
+    Summary,
+    #[name = "登録・期限前の通知・まとめ投稿"]
+    All,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, poise::ChoiceParameter)]
@@ -1556,6 +1568,9 @@ pub async fn settings(
     #[description = "期限の時刻を省略したときの時刻（例: 08:30）"] default_time: Option<String>,
     #[description = "通知などの本文に入った URL をカードで表示するか（初期値: 出さない）"]
     link_preview: Option<LinkPreviewChoice>,
+    #[description = "通知ロールをメンションするとき（初期値: まとめ投稿だけ）"] mention: Option<
+        MentionChoice,
+    >,
 ) -> Result<(), Error> {
     let guild_id = require_guild!(ctx);
     let db = &ctx.data().db;
@@ -1599,13 +1614,15 @@ pub async fn settings(
         default_time,
         notify_role_id: None,
         hide_link_previews: link_preview.map(|c| c == LinkPreviewChoice::Hide),
+        mention_all: mention.map(|c| c == MentionChoice::All),
     };
 
     let changed = patch.channel_id.is_some()
         || patch.remind_before.is_some()
         || patch.summary_time.is_some()
         || patch.default_time.is_some()
-        || patch.hide_link_previews.is_some();
+        || patch.hide_link_previews.is_some()
+        || patch.mention_all.is_some();
     if !changed {
         let current = db.hw_settings(guild_id).await?;
         ctx.send(poise::CreateReply::default().embed(settings_embed(&current)))

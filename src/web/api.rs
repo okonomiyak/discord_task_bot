@@ -405,7 +405,7 @@ async fn create_homework(
             u = due_unix(&hw.due_date),
         );
         let msg = CreateMessage::new()
-            .content(with_role_mention(Some(&settings), content))
+            .content(with_role_mention(settings.for_event_mention(), content))
             .components(done_buttons(
                 std::slice::from_ref(&hw),
                 false,
@@ -424,7 +424,7 @@ async fn create_homework(
             &state,
             channel.as_deref(),
             msg,
-            Some(&settings),
+            settings.for_event_mention(),
             settings.hide_link_previews,
         )
         .await;
@@ -657,6 +657,8 @@ struct SettingsDto {
     notify_role: Option<RoleDto>,
     /// 本文の URL のカードを出さない
     hide_link_previews: bool,
+    /// 通知ロールを登録時・期限前の通知でもメンションする（false ならまとめ投稿だけ）
+    mention_all: bool,
     /// 自分への DM 通知（秒、None でオフ）
     my_dm_remind_before: Option<i64>,
     timezone: String,
@@ -680,6 +682,7 @@ async fn settings_dto(state: &AppState, gid: &str, user_id: &str) -> Result<Sett
         default_time: s.default_time,
         notify_role,
         hide_link_previews: s.hide_link_previews,
+        mention_all: s.mention_all,
         my_dm_remind_before: state
             .db
             .hw_get_dm(gid.to_string(), user_id.to_string())
@@ -728,6 +731,7 @@ struct SettingsInput {
     summary_time: Option<String>,
     default_time: Option<String>,
     hide_link_previews: Option<bool>,
+    mention_all: Option<bool>,
 }
 
 /// サーバーの設定を変更する（Discord の /hw settings と同じく誰でも変更できる）
@@ -775,6 +779,7 @@ async fn update_settings(
                 default_time,
                 notify_role_id: None,
                 hide_link_previews: input.hide_link_previews,
+                mention_all: input.mention_all,
             },
         )
         .await?;
