@@ -108,8 +108,13 @@ async fn call(
     body: Option<Value>,
 ) -> (StatusCode, Value) {
     let mut req = Request::builder().method(method).uri(path);
+    // "Bearer ..." なら API トークン、それ以外はログインの Cookie
     if let Some(c) = cookie {
-        req = req.header(header::COOKIE, c);
+        req = if c.starts_with("Bearer ") {
+            req.header(header::AUTHORIZATION, c)
+        } else {
+            req.header(header::COOKIE, c)
+        };
     }
     let req = match body {
         Some(b) => req
@@ -123,6 +128,110 @@ async fn call(
     let bytes = to_bytes(res.into_body(), usize::MAX).await.unwrap();
     let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
     (status, value)
+}
+
+#[tokio::test]
+async fn api_tokens_work_like_a_login() {
+    let state = test_state();
+    let alice = login_as(&state, "1", false).await;
+
+    // ブラウザでログインして発行する（平文は発行時だけ）
+    let (status, created) = call(
+        &state,
+        "POST",
+        "/api/tokens",
+        Some(&alice),
+        Some(json!({ "name": "ノート PC" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let token = created["token"].as_str().unwrap().to_string();
+    assert!(token.starts_with("hwb_") && token.len() > 60);
+    let (_, list) = call(&state, "GET", "/api/tokens", Some(&alice), None).await;
+    assert_eq!(list[0]["name"], "ノート PC");
+    assert!(list[0].get("token").is_none());
+    // DB にはハッシュだけ
+    assert!(
+        state
+            .db
+            .api_token_use(token.clone())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    // トークンで API を使える
+    let bearer = format!("Bearer {token}");
+    let (status, me) = call(&state, "GET", "/api/me", Some(&bearer), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(me["id"], "1");
+    assert_eq!(me["guilds"][0]["id"], GUILD);
+    let (status, hw) = call(
+        &state,
+        "POST",
+        &format!("/api/guilds/{GUILD}/homework"),
+        Some(&bearer),
+        Some(json!({ "subject": "数学", "title": "CLI から", "due": "明日" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(hw["title"], "CLI から");
+
+    // トークンからトークンは作れない
+    let (status, _) = call(
+        &state,
+        "POST",
+        "/api/tokens",
+        Some(&bearer),
+        Some(json!({ "name": "x" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // 間違ったトークンは 401（Cookie があっても）
+    let (status, _) = call(&state, "GET", "/api/me", Some("Bearer hwb_wrong"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // 削除したら使えない
+    let id = created["id"].as_i64().unwrap();
+    let (status, _) = call(
+        &state,
+        "DELETE",
+        &format!("/api/tokens/{id}"),
+        Some(&alice),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = call(&state, "GET", "/api/me", Some(&bearer), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn api_token_only_reaches_servers_the_user_is_still_in() {
+    let state = test_state();
+    // ユーザー 3 はサーバーのメンバーではない（発行時の一覧には入っていても使えない）
+    let carol = login_as(&state, "3", false).await;
+    let (_, created) = call(
+        &state,
+        "POST",
+        "/api/tokens",
+        Some(&carol),
+        Some(json!({ "name": "x" })),
+    )
+    .await;
+    let bearer = format!("Bearer {}", created["token"].as_str().unwrap());
+    let (_, me) = call(&state, "GET", "/api/me", Some(&bearer), None).await;
+    assert_eq!(me["guilds"], json!([]));
+    let (status, _) = call(
+        &state,
+        "GET",
+        &format!("/api/guilds/{GUILD}/homework"),
+        Some(&bearer),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
 }
 
 #[tokio::test]

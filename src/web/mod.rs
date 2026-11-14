@@ -189,12 +189,41 @@ pub struct WebGuild {
     pub can_manage: bool,
 }
 
-/// ログイン中のユーザー（API ハンドラの引数にすると未ログインは 401 になる）
+/// ログイン中のユーザー（API ハンドラの引数にすると未ログインは 401 になる）。
+/// ブラウザはログインの Cookie、CLI などは `Authorization: Bearer <API トークン>` で認証する
 pub struct Auth {
     pub user_id: String,
     pub username: String,
     pub avatar: Option<String>,
     pub guilds: Vec<WebGuild>,
+    /// API トークンで認証した（トークンの発行・削除はブラウザからだけにする）
+    pub via_token: bool,
+}
+
+/// API トークンの先頭に付ける文字（見分けやすくするため）
+pub const TOKEN_PREFIX: &str = "hwb_";
+
+/// 新しい API トークン（平文。DB にはハッシュだけを保存する）
+pub fn new_api_token() -> String {
+    format!("{TOKEN_PREFIX}{}", random_token())
+}
+
+/// API トークンのハッシュ（SHA-256 の 16 進）
+pub fn hash_token(token: &str) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(token.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+        .map(str::trim)
 }
 
 impl Auth {
@@ -215,6 +244,29 @@ impl FromRequestParts<AppState> for Auth {
         parts: &mut Parts,
         state: &AppState,
     ) -> Result<Self, Self::Rejection> {
+        if let Some(token) = bearer(&parts.headers) {
+            let token = state
+                .db
+                .api_token_use(hash_token(token))
+                .await?
+                .ok_or_else(ApiError::unauthorized)?;
+            // トークンは長く使われるので、発行時のサーバーのうち今もメンバーのものだけにする
+            let snapshot: Vec<WebGuild> =
+                serde_json::from_str(&token.guilds_json).unwrap_or_default();
+            let mut guilds = Vec::new();
+            for g in snapshot {
+                if state.discord.member(&g.id, &token.user_id).await.is_some() {
+                    guilds.push(g);
+                }
+            }
+            return Ok(Self {
+                user_id: token.user_id,
+                username: token.username,
+                avatar: token.avatar,
+                guilds,
+                via_token: true,
+            });
+        }
         let sid = cookie(&parts.headers, SESSION_COOKIE).ok_or_else(ApiError::unauthorized)?;
         let session = state
             .db
@@ -226,6 +278,7 @@ impl FromRequestParts<AppState> for Auth {
             username: session.username,
             avatar: session.avatar,
             guilds: serde_json::from_str(&session.guilds_json).unwrap_or_default(),
+            via_token: false,
         })
     }
 }

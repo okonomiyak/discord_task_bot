@@ -39,6 +39,7 @@ Discord でログインして、ブラウザ（スマホ・PC）から宿題・�
 - ✅ ボタンで自分の分を完了に。追加・編集・削除もその場で
 - Web から登録したものは Discord のチャンネルにも投稿される（完了ボタン付き）
 - 見られるのは「自分が入っていて、ボットもいるサーバー」だけ。削除の権限は Discord と同じ
+- CLI（`hw` コマンド）: 設定画面で API トークンを発行すると、パソコンのコマンドや Claude Code などの AI から登録・完了・一覧ができる（「[CLI・AI から使う](#cli-hw-コマンドai-から使う)」）
 - OGP 対応: URL を Discord・LINE・X などに貼ると、画像付きのカードで表示される（画像は `src/web/og.png`、作り直すときは `assets/render-og.js`）。
   og:url・og:image は `WEB_BASE_URL` から作るので、外から見た URL を正しく設定しておく。スマホでホーム画面に追加したときのアイコンもある
 - Discord から: `/web` でリンクを表示（`public:true` でチャンネルに貼れる）。登録・期限前の通知・まとめ投稿・一覧・
@@ -227,6 +228,44 @@ master に push（PR をマージ）して CI が通ると、自宅 PC の
 
 `WEB_BASE_URL` と Developer Portal の Redirects は**完全に一致**させてください（http/https、ドメイン、末尾 `/auth/callback`）。
 
+### CLI（`hw` コマンド）・AI から使う
+
+Web ダッシュボードを有効にすると、パソコンのコマンド `hw` から宿題を登録・完了・一覧できます。
+Claude Code などの AI にコマンドを実行させれば、「明日の数学のワーク p.10 を登録して」と頼むだけで登録できます。
+
+1. Web の設定画面の **API トークン（CLI 用）** で、名前（例: ノート PC）を付けてトークンを発行する（トークンは発行したときだけ表示されます）
+2. CLI をインストールしてログインする（Rust が必要です）
+   ```bash
+   cargo install --locked --git https://github.com/okonomiyak/discord_task_bot hw-cli
+   hw login --url https://hw.example.com    # トークンを聞かれたら貼り付け
+   hw use クラス                              # サーバーが複数あるとき
+   ```
+3. 使う
+   ```bash
+   hw todo                                      # 自分がまだ終わっていない宿題
+   hw list                                      # これからの宿題（--exam でテスト、--past で期限切れ）
+   hw add 数学 "ワーク p.10-15" 明日 --memo "答え合わせまで"
+   hw add 英語 "単語テスト Unit5" "金曜 10:40" --exam
+   hw done 12 13                                # 完了（hw undo で取り消し）
+   hw edit 12 --due 金曜
+   hw delete 12 --yes
+   hw search 単語
+   hw list --json                               # AI やスクリプト向けの JSON
+   ```
+   `hw --help`・`hw add --help` で使い方が出ます。設定ファイルの代わりに環境変数 `HW_URL`・`HW_TOKEN`・`HW_GUILD` も使えます。
+
+AI（Claude Code など）に使わせるときは、AI への指示（`CLAUDE.md` など）に次のように書いておくと便利です。
+
+```markdown
+宿題の管理には `hw` コマンドを使う（`hw --help` で使い方）。一覧は `hw todo --json` / `hw list --json`、
+登録は `hw add <科目> <内容> <期限> [--memo ...] [--exam]`、完了は `hw done <ID>`。削除は確認してから。
+```
+
+- トークンを知っている人はあなたとして宿題を操作できます。人に見せず、要らなくなったら設定画面で削除してください
+- DB にはトークンのハッシュ（SHA-256）だけを保存し、平文は保存しません。1人 10 個まで
+- 使えるのは、発行時に入っていたサーバーのうち、今もメンバーであるサーバーだけです
+- トークンの発行・削除はブラウザでログインしているときだけできます（トークンから新しいトークンは作れません）
+
 ### 二重起動の防止
 
 同じデータベースを使うボットを2つ起動すると、1回のコマンドが2回実行されてしまいます（宿題が2件登録されるなど）。
@@ -241,7 +280,7 @@ kill <PID>
 ### 開発
 
 ```bash
-cargo fmt && cargo clippy --all-targets && cargo test
+cargo fmt --all && cargo clippy --workspace --all-targets && cargo test --workspace
 ```
 
 GitHub Actions で push / PR ごとに同じチェックが走ります。

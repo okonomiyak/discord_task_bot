@@ -1,3 +1,7 @@
+[workspace]
+# cli/ は宿題ボードを操作する CLI（hw コマンド）。ボット本体のビルドには含まれない
+members = [".", "cli"]
+
 [package]
 name = "discord_task_bot"
 version = "0.1.0"
@@ -15,6 +19,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.8"
+sha2 = "0.10"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

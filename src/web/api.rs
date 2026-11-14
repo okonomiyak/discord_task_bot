@@ -7,7 +7,7 @@ use axum::{
 use poise::serenity_prelude::{ChannelId, CreateMessage};
 use serde::{Deserialize, Serialize};
 
-use super::{ApiError, AppState, Auth, WebGuild, discord::ChannelInfo};
+use super::{ApiError, AppState, Auth, WebGuild, discord::ChannelInfo, hash_token, new_api_token};
 use crate::{
     commands::{WebTab, delete_event, done_buttons, gcal_button, sync_event, web_button},
     db::{HwEdit, TaskEdit},
@@ -28,6 +28,8 @@ const TODO_OVERDUE_DAYS: i64 = 7;
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/me", get(me))
+        .route("/tokens", get(list_tokens).post(create_token))
+        .route("/tokens/{id}", delete(delete_token))
         .route("/guilds/{gid}/subjects", get(subjects))
         .route("/guilds/{gid}/stats", get(stats))
         .route("/guilds/{gid}/search", get(search))
@@ -178,6 +180,97 @@ async fn me(State(state): State<AppState>, auth: Auth) -> ApiResult<MeDto> {
         avatar_url,
         guilds,
     }))
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// /api/tokens（CLI などで使う API トークン）
+// ────────────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize)]
+struct TokenDto {
+    id: i64,
+    name: String,
+    created_at: i64,
+    last_used_at: Option<i64>,
+    /// 発行したときだけ平文のトークンを返す（あとから見ることはできない）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+}
+
+fn token_dto(t: crate::db::ApiToken, token: Option<String>) -> TokenDto {
+    TokenDto {
+        id: t.id,
+        name: t.name,
+        created_at: t.created_at,
+        last_used_at: t.last_used_at,
+        token,
+    }
+}
+
+/// トークンの発行・削除はブラウザでログインしているときだけ（トークンからトークンを作らせない）
+fn require_browser(auth: &Auth) -> Result<(), ApiError> {
+    if auth.via_token {
+        Err(ApiError::forbidden(
+            "API トークンの発行・削除は Web の設定画面から行ってください",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+async fn list_tokens(State(state): State<AppState>, auth: Auth) -> ApiResult<Vec<TokenDto>> {
+    require_browser(&auth)?;
+    let list = state.db.api_token_list(auth.user_id.clone()).await?;
+    Ok(Json(list.into_iter().map(|t| token_dto(t, None)).collect()))
+}
+
+#[derive(Deserialize)]
+struct TokenInput {
+    name: Option<String>,
+}
+
+async fn create_token(
+    State(state): State<AppState>,
+    auth: Auth,
+    Json(input): Json<TokenInput>,
+) -> Result<(StatusCode, Json<TokenDto>), ApiError> {
+    require_browser(&auth)?;
+    let name = required(input.name.as_deref().unwrap_or(""), "トークンの名前", 40)?;
+    let token = new_api_token();
+    let owner = crate::db::ApiToken {
+        id: 0,
+        user_id: auth.user_id.clone(),
+        username: auth.username.clone(),
+        avatar: auth.avatar.clone(),
+        guilds_json: serde_json::to_string(&auth.guilds).unwrap_or_else(|_| "[]".into()),
+        name,
+        created_at: 0,
+        last_used_at: None,
+    };
+    let created = state
+        .db
+        .api_token_create(owner, hash_token(&token))
+        .await?
+        .ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "トークンは {} 個までです。使っていないものを削除してください",
+                crate::db::MAX_API_TOKENS
+            ))
+        })?;
+    Ok((StatusCode::CREATED, Json(token_dto(created, Some(token)))))
+}
+
+async fn delete_token(
+    State(state): State<AppState>,
+    auth: Auth,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    require_browser(&auth)?;
+    if state.db.api_token_delete(auth.user_id.clone(), id).await? {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::not_found("そのトークンはありません"))
+    }
 }
 
 async fn subjects(

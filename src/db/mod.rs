@@ -5,7 +5,7 @@ mod homework;
 mod web;
 
 pub use homework::HwEdit;
-pub use web::WebSession;
+pub use web::{ApiToken, MAX_API_TOKENS, WebSession};
 
 use crate::models::{PendingReminder, Priority, Task, TaskQuery, TaskSort, TaskStatus};
 use crate::time;

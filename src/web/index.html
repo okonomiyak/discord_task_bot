@@ -121,6 +121,7 @@
   .help .toc a { font-size: 13px; padding: 3px 8px; border: 1px solid var(--border); text-decoration: none; color: var(--text); background: var(--surface); }
   @media (max-width: 420px) { .help dl { grid-template-columns: 1fr; gap: 2px; } .help dd { margin-bottom: 6px; } }
   .panel .hint { font-size: 12px; }
+  .token-box { display: block; padding: 10px; background: var(--bg); border: 1px solid var(--border); font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; white-space: pre-wrap; user-select: all; }
   .row2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
   .field input, .field select, .field textarea { min-width: 0; width: 100%; }
   @media (max-width: 420px) { .row2 { grid-template-columns: 1fr; } }
@@ -425,7 +426,7 @@ function shareText(homework, exams) {
   }
   return out.join("\n");
 }
-async function copyText(text) {
+async function copyText(text, done = "コピーしました。LINE などに貼り付けられます") {
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -435,7 +436,7 @@ async function copyText(text) {
     const ok = document.execCommand("copy"); ta.remove();
     if (!ok) { toast("コピーできませんでした"); return; }
   }
-  toast("コピーしました。LINE などに貼り付けられます");
+  toast(done);
 }
 /// 「テキストでコピー」ボタン（何もなければ出さない）
 function copyButton(homework, exams) {
@@ -825,7 +826,8 @@ function viewHelp(v) {
         ["/web", "このサイトのリンクを表示（public:true でみんなに見せる）"],
         ["/help", "コマンド一覧を Discord に表示"],
       ]),
-      el("p", { class: "hint" }, "登録・通知・まとめ投稿・一覧のメッセージにある「Web で開く」ボタンからも、このサイトのそのサーバーの画面に直接来られます。")),
+      el("p", { class: "hint" }, "登録・通知・まとめ投稿・一覧のメッセージにある「Web で開く」ボタンからも、このサイトのそのサーバーの画面に直接来られます。"),
+      el("p", { class: "hint" }, "パソコンのコマンド（hw）からも、登録・完了・一覧ができます。Claude Code などの AI に実行させることもできます。設定画面の「API トークン（CLI 用）」でトークンを発行して使います。")),
   );
 }
 
@@ -933,6 +935,8 @@ async function viewSettings(v) {
     field("未完了の宿題・テストを DM で知らせるタイミング", dm, "サーバーメンバーからの DM を許可しておいてください"),
     el("div", { class: "btns" }, saveDm)));
 
+  v.append(await tokenPanel());
+
   // 毎週の宿題
   const panel = el("section", { class: "panel" }, el("h2", {}, "毎週の宿題"),
     el("span", { class: "hint" }, "期限が過ぎると翌週の分が自動で登録されます。止めても登録済みの宿題は残ります。"));
@@ -978,6 +982,58 @@ async function viewSettings(v) {
     field("メモ", add.memo),
     el("div", { class: "btns" }, addBtn)));
   v.append(panel);
+}
+
+/// API トークン（CLI の hw コマンドや、AI に操作させるときに使う）。issued は発行したばかりのトークン（今だけ表示）
+async function tokenPanel(issued = null) {
+  const panel = el("section", { class: "panel" }, el("h2", {}, "API トークン（CLI 用）"),
+    el("span", { class: "hint" }, "hw コマンド（CLI）で使うトークンです。Claude Code などの AI にコマンドを実行させて、宿題を登録・完了することもできます。トークンを知っている人は、あなたとして宿題を操作できるので、人に見せないでください。"));
+  let tokens = [];
+  try { tokens = await api("/api/tokens"); } catch (err) { panel.append(el("div", { class: "hint" }, err.message)); return panel; }
+
+  if (issued) {
+    const login = `hw login --url ${location.origin}`;
+    panel.append(el("div", { class: "repeat", style: "flex-direction:column;align-items:stretch;gap:8px" },
+      el("strong", {}, `「${issued.name}」を発行しました`),
+      el("span", { class: "hint" }, "このトークンは今だけ表示されます。画面を移る前にコピーしてください。"),
+      el("code", { class: "token-box" }, issued.token),
+      el("div", {}, el("button", { type: "button", class: "btn small", onclick: () => copyText(issued.token, "トークンをコピーしました") }, "トークンをコピー")),
+      el("span", { class: "hint" }, "CLI のインストールとログイン（トークンを聞かれたら貼り付け）:"),
+      el("code", { class: "token-box" }, `cargo install --locked --git https://github.com/okonomiyak/discord_task_bot hw-cli\n${login}`)));
+  }
+  if (!tokens.length) panel.append(el("div", { class: "hint" }, "まだありません"));
+  for (const t of tokens) {
+    panel.append(el("div", { class: "repeat" },
+      el("div", { class: "body" },
+        el("span", { class: "title block" }, t.name),
+        el("div", { class: "meta" },
+          el("span", {}, `作成 ${fmtDate(t.created_at)}`),
+          el("span", {}, t.last_used_at ? `最後に使った日 ${fmtDate(t.last_used_at)}` : "まだ使われていません"))),
+      el("button", {
+        type: "button", class: "btn danger", style: "margin:0",
+        onclick: async (e) => {
+          if (!confirm(`トークン「${t.name}」を削除しますか？このトークンを使っている CLI は使えなくなります。`)) return;
+          e.currentTarget.disabled = true;
+          try { await api(`/api/tokens/${t.id}`, { method: "DELETE" }); toast("削除しました"); render(); }
+          catch (err) { toast(err.message); e.currentTarget.disabled = false; }
+        },
+      }, "削除")));
+  }
+
+  const name = el("input", { maxlength: 40, placeholder: "例: ノート PC" });
+  const issue = el("button", { type: "button", class: "btn primary" }, "発行");
+  issue.addEventListener("click", async () => {
+    issue.disabled = true;
+    try {
+      const t = await api("/api/tokens", { method: "POST", body: { name: name.value } });
+      panel.replaceWith(await tokenPanel(t));
+    } catch (err) { toast(err.message); issue.disabled = false; }
+  });
+  panel.append(el("div", { class: "repeat", style: "flex-direction:column;align-items:stretch;gap:10px" },
+    el("strong", {}, "新しく発行する"),
+    field("名前（どこで使うか）", name),
+    el("div", { class: "btns" }, issue)));
+  return panel;
 }
 
 async function render() {
